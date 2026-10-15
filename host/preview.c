@@ -71,5 +71,20 @@ int main(void) {
             ui_draw(1.0f / 60.0f, &d);
         }
     }
+    /* касание по клавишам слева - волна идёт и по клавишам */
+    {
+        UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
+        static char name[32];
+        set_state(MODE_STRUM, 1, 7, 4, 0);
+        StrumFinger f;
+        g_x0 = g_x1 = 600.0f; f.x = 600.0f;
+        strum_down(&f, 3, strum_pos_from_xy(600, 330), &g_m, on_hit, NULL);
+        ui_touch_glow(600, 330, 1);
+        for (int fr = 0; fr < 14; fr++) {
+            snprintf(name, sizeof(name), "keys_%02d", fr);
+            host_frame_name = name;
+            ui_draw(1.0f / 60.0f, &d);
+        }
+    }
     return 0;
 }

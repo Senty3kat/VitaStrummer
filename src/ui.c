@@ -64,6 +64,17 @@ static Canvas g_cv_bg;
 static vita2d_texture *g_tex_bg = NULL;
 static Canvas g_cv_plate[PL_N];                 /* PL_NORMAL не нужен отдельно - он уже в фоне */
 static vita2d_texture *g_tex_plate[PL_N];
+static Canvas g_cv_stencil;                      /* панель с прорезями по струнам */
+static vita2d_texture *g_tex_stencil = NULL;
+/* поле подсветки в низком разрешении: GPU растягивает его с плавной интерполяцией.
+ * Три текстуры по кругу - процессор пишет в ту, которую GPU уже не читает. */
+#define FIELD_DIV 6
+#define FIELD_W (PLATE_W / FIELD_DIV + 2)
+#define FIELD_H (PLATE_H / FIELD_DIV + 2)
+#define N_FIELD_TEX 3
+static Canvas g_cv_field;
+static vita2d_texture *g_tex_field[N_FIELD_TEX];
+static int g_field_next = 0;
 static Sprite g_root_spr[N_ROOTS][2], g_mod_spr[N_MODS][ST_N], g_center_spr, g_led[2];
 static vita2d_pgf *g_pgf = NULL;
 
@@ -171,8 +182,12 @@ static void paint_string(Canvas *c, float ox, float oy, int i, float dy, uint32_
     cv_strand(c, NECK_X1 - 1 - ox, yc, LINE_T, BULB_X1 - ox, ys, BAR_H, BULB_TSTART, BAR_X1 - ox, col);
 }
 
-static void paint_strings(Canvas *c, float ox, float oy, const PlateSkin *k) {
+static void paint_string_shadows(Canvas *c, float ox, float oy) {
     for (int i = 0; i < N_STRINGS; i++) paint_string(c, ox, oy, i, 1.6f, DARK_A(45));
+}
+
+static void paint_strings(Canvas *c, float ox, float oy, const PlateSkin *k) {
+    paint_string_shadows(c, ox, oy);
     for (int i = 0; i < N_STRINGS; i++) paint_string(c, ox, oy, i, 0.0f, k->col);
 }
 
@@ -246,8 +261,7 @@ static void paint_bg(Canvas *c) {
     Box bb_lip = { PLATE_X - 6, PLATE_Y - 6, PLATE_X + PLATE_W + 6, PLATE_Y + PLATE_H + 6 };
     bevel(c, sdf_carved, &lip, bb_lip, &SK_CREAM, 3.0f);
     engrave(c, sdf_carved, &pl, bb_pl, C_PLATE_TOP, C_PLATE_BOT, 1);
-
-    paint_strings(c, 0, 0, &PS_NORMAL);
+    /* струны рисует build_all: до них снимается трафарет */
 }
 
 /* ---------- спрайты ---------- */
@@ -296,6 +310,24 @@ static int build_all(void) {
     if (!canvas_alloc(&g_cv_bg, SCR_W, SCR_H)) return 0;
     paint_bg(&g_cv_bg);
 
+    /* трафарет для подсветки: панель с тенями струн, но с прорезями по форме струн и клавиш.
+     * Цветное поле ряби рисуется под ним - и видно только на струнах. */
+    {
+        Canvas mask;
+        if (!canvas_alloc(&g_cv_stencil, PLATE_W, PLATE_H) || !canvas_alloc(&mask, PLATE_W, PLATE_H)) return 0;
+        for (int y = 0; y < PLATE_H; y++)
+            memcpy(g_cv_stencil.px + (size_t)y * PLATE_W, g_cv_bg.px + (size_t)(y + PLATE_Y) * SCR_W + PLATE_X, (size_t)PLATE_W * 4);
+        paint_string_shadows(&g_cv_stencil, PLATE_X, PLATE_Y);
+        for (int i = 0; i < N_STRINGS; i++) paint_string(&mask, PLATE_X, PLATE_Y, i, 0.0f, RGBA8(255, 255, 255, 255));
+        for (int k = 0; k < PLATE_W * PLATE_H; k++) {
+            unsigned cov = mask.px[k] >> 24;
+            g_cv_stencil.px[k] = (g_cv_stencil.px[k] & 0x00FFFFFFu) | ((255u - cov) << 24);
+        }
+        free(mask.px);
+    }
+    paint_strings(&g_cv_bg, 0, 0, &PS_NORMAL);
+    if (!canvas_alloc(&g_cv_field, FIELD_W, FIELD_H)) return 0;
+
     /* "горящая" панель: копия фона в границах панели + струны оранжевым */
     for (int v = PL_LIT; v < PL_N; v++) {
         if (!canvas_alloc(&g_cv_plate[v], PLATE_W, PLATE_H)) return 0;
@@ -328,6 +360,9 @@ static void free_textures(void) {
         for (int k = 0; k < 2; k++) { if (g_root_spr[i][k].tex) vita2d_free_texture(g_root_spr[i][k].tex); g_root_spr[i][k].tex = NULL; }
     for (int i = 0; i < N_MODS; i++)
         for (int k = 0; k < ST_N; k++) { if (g_mod_spr[i][k].tex) vita2d_free_texture(g_mod_spr[i][k].tex); g_mod_spr[i][k].tex = NULL; }
+    if (g_tex_stencil) vita2d_free_texture(g_tex_stencil);
+    g_tex_stencil = NULL;
+    for (int k = 0; k < N_FIELD_TEX; k++) { if (g_tex_field[k]) vita2d_free_texture(g_tex_field[k]); g_tex_field[k] = NULL; }
     if (g_center_spr.tex) vita2d_free_texture(g_center_spr.tex);
     g_center_spr.tex = NULL;
     for (int k = 0; k < 2; k++) { if (g_led[k].tex) vita2d_free_texture(g_led[k].tex); g_led[k].tex = NULL; }
@@ -339,6 +374,11 @@ static void create_textures(void) {
     for (int i = 0; i < N_ROOTS; i++) for (int k = 0; k < 2; k++) g_root_spr[i][k].tex = tex_from(&g_root_spr[i][k].cv);
     for (int i = 0; i < N_MODS; i++) for (int k = 0; k < ST_N; k++) g_mod_spr[i][k].tex = tex_from(&g_mod_spr[i][k].cv);
     g_center_spr.tex = tex_from(&g_center_spr.cv);
+    g_tex_stencil = tex_from(&g_cv_stencil);
+    for (int k = 0; k < N_FIELD_TEX; k++) {
+        g_tex_field[k] = vita2d_create_empty_texture(FIELD_W, FIELD_H);
+        if (g_tex_field[k]) vita2d_texture_set_filters(g_tex_field[k], SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
+    }
     for (int k = 0; k < 2; k++) g_led[k].tex = tex_from(&g_led[k].cv);
 }
 
@@ -382,20 +422,42 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
 }
 
 /* ---------- "жидкая" подсветка ----------
- * Из точки касания расходится мягкое кольцо-рябь, а струны показывают его срез: на панели
- * видна круглая волна, нарезанная струнами (как на эскизах). За фронтом волна гаснет.
- * Каждая струна рисуется кусками "горящей" панели с прозрачностью по яркости ряби. */
-#define FX_X0 (BULB_X1 - 30.0f)            /* где на струне может гореть подсветка */
+ * Из точки касания расходится мягкое кольцо-рябь. Поле ряби считается в маленькой
+ * текстуре (шаг FIELD_DIV пикселей), GPU растягивает её с плавной интерполяцией, а сверху
+ * ложится трафарет - синяя панель с прорезями по струнам и клавишам. Поэтому цвет мягкий,
+ * без ступенек, и виден только на струнах и клавишах.
+ * Цвета - из постеров Retoka: тёплая гамма у касаний, холодная у звучащих струн. */
+#define FX_X0 (BULB_X1 - 30.0f)            /* струна в полосе (для слабой подсветки тоники) */
 #define FX_X1 (BAR_X1 + 1.0f)
-#define FX_SLICE 6.0f                      /* шаг кусков вдоль струны */
 #define MAX_RIPPLES 24
 
-typedef struct { float x, y, age, amp, speed, width, tau; } Ripple;
+enum { PAL_WARM = 0, PAL_COOL = 1 };
+typedef struct { float x, y, age, amp, speed, width, tau; int pal; } Ripple;
 static Ripple g_rip[MAX_RIPPLES];
 static int g_nrip = 0;
 static float g_trail_t = 0.0f;             /* время с последней ряби следа */
 
-static void ripple_add(float x, float y, float amp, float speed, float width, float tau) {
+/* палитры: от края волны (0) к её самой яркой части (1) */
+typedef struct { float t; int r, g, b; } PalStop;
+static const PalStop PAL[2][5] = {
+    { { 0.00f, 252, 228, 156 }, { 0.30f, 250, 170, 66 }, { 0.55f, 242, 106, 30 },
+      { 0.80f, 196, 40, 34 },   { 1.00f, 34, 26, 38 } },               /* жёлтый -> янтарь -> оранжевый -> красный -> тёмное ядро */
+    { { 0.00f, 196, 238, 222 }, { 0.30f, 112, 214, 204 }, { 0.55f, 32, 162, 182 },
+      { 0.80f, 16, 86, 126 },   { 1.00f, 14, 26, 50 } },              /* мята -> бирюза -> морская волна -> глубокий синий */
+};
+
+static uint32_t pal_color(int pal, float b, unsigned alpha) {
+    const PalStop *p = PAL[pal];
+    int k = 0;
+    while (k < 3 && b > p[k + 1].t) k++;
+    float t = (b - p[k].t) / (p[k + 1].t - p[k].t);
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return RGBA8((int)(p[k].r + (p[k + 1].r - p[k].r) * t), (int)(p[k].g + (p[k + 1].g - p[k].g) * t),
+                 (int)(p[k].b + (p[k + 1].b - p[k].b) * t), alpha);
+}
+
+static void ripple_add(float x, float y, float amp, float speed, float width, float tau, int pal) {
     Ripple *r;
     if (g_nrip < MAX_RIPPLES) r = &g_rip[g_nrip++];
     else {                                 /* места нет - заменяем самую слабую */
@@ -403,24 +465,46 @@ static void ripple_add(float x, float y, float amp, float speed, float width, fl
         for (int i = 1; i < MAX_RIPPLES; i++)
             if (g_rip[i].amp * expf(-g_rip[i].age / g_rip[i].tau) < r->amp * expf(-r->age / r->tau)) r = &g_rip[i];
     }
-    r->x = x; r->y = y; r->age = 0.0f; r->amp = amp; r->speed = speed; r->width = width; r->tau = tau;
+    r->x = x; r->y = y; r->age = 0.0f; r->amp = amp; r->speed = speed; r->width = width; r->tau = tau; r->pal = pal;
 }
 
-/* яркость ряби в точке: мягкая сердцевина + расходящееся кольцо */
-static float ripple_at(float x, float y) {
+/* яркость ряби в точке (самая яркая из перекрывающихся) и её палитра */
+static float ripple_at(float x, float y, int *pal) {
     float b = 0.0f;
+    *pal = PAL_WARM;
     for (int i = 0; i < g_nrip; i++) {
         const Ripple *r = &g_rip[i];
-        float dx = x - r->x, dy = y - r->y, d = sqrtf(dx * dx + dy * dy);
         float fade = r->amp * expf(-r->age / r->tau);
         float R = r->speed * r->age, w = r->width + 0.25f * R;
+        float dx = x - r->x, dy = y - r->y, d2 = dx * dx + dy * dy;
+        float reach = R + 3.0f * w;
+        if (d2 > reach * reach && d2 > 9.0f * r->width * r->width) continue;   /* далеко - не считаем */
+        float d = sqrtf(d2);
         float ring = (d - R) / w;
         float core = d / (r->width * 1.4f);
         float v = fade * (expf(-ring * ring) + 0.6f * expf(-r->age / (r->tau * 0.4f)) * expf(-core * core));
-        if (v > b) b = v;                    /* перекрытия не складываются - видны отдельные кольца */
+        if (v > b) { b = v; *pal = r->pal; }
     }
-    if (b > 1.0f) b = 1.0f;
-    return powf(b, 0.7f);                    /* насыщеннее в середине волны, мягко у краёв */
+    return b > 1.0f ? 1.0f : b;
+}
+
+/* заполнить поле: точка (u, v) - центр участка FIELD_DIV x FIELD_DIV на экране */
+static void field_render(void) {
+    uint32_t *px = g_cv_field.px;
+    for (int v = 0; v < FIELD_H; v++) {
+        float y = PLATE_Y + ((float)v - 0.5f) * FIELD_DIV;
+        for (int u = 0; u < FIELD_W; u++) {
+            float x = PLATE_X + ((float)u - 0.5f) * FIELD_DIV;
+            int pal;
+            float b = ripple_at(x, y, &pal);
+            /* прозрачность плавно нарастает; цвет есть и у прозрачных точек,
+             * чтобы при растяжении по краям не было тёмной каймы */
+            float a = b * 2.2f;
+            if (a > 1.0f) a = 1.0f;
+            a = a * a * (3.0f - 2.0f * a);
+            px[v * FIELD_W + u] = pal_color(pal, b, (unsigned)(a * 235.0f));
+        }
+    }
 }
 
 static void plate_span(const float br[4], float a, float b, unsigned alpha) {
@@ -430,25 +514,22 @@ static void plate_span(const float br[4], float a, float b, unsigned alpha) {
 }
 
 static void draw_plate(void) {
-    for (int i = 0; i < N_STRINGS; i++) {
-        float br[4];
-        bar_rect(i, br);
-        /* в аккорде слабо горят струны с тоникой */
-        unsigned base_a = (g_st.chord_on && ((g_map.note[i] % 12 + 12) % 12) == g_st.root) ? 55 : 0;
-        if (g_nrip == 0) { plate_span(br, FX_X0, FX_X1, base_a); continue; }
-        float ys = strum_string_y(i);
-        /* соседние куски с одинаковой яркостью склеиваются в один */
-        float run_a = FX_X0;
-        unsigned run_alpha = 0;
-        for (float x = FX_X0; x < FX_X1; x += FX_SLICE) {
-            float xe = x + FX_SLICE > FX_X1 ? FX_X1 : x + FX_SLICE;
-            unsigned a = (unsigned)(ripple_at((x + xe) * 0.5f, ys) * 255.0f);
-            if (a < base_a) a = base_a;
-            a &= ~7u;                       /* ступени по 8 - меньше кусков, глазом не видно */
-            if (a != run_alpha) { plate_span(br, run_a, x, run_alpha); run_a = x; run_alpha = a; }
+    /* в аккорде слабо горят струны с тоникой */
+    if (g_st.chord_on)
+        for (int i = 0; i < N_STRINGS; i++) {
+            if (((g_map.note[i] % 12 + 12) % 12) != g_st.root) continue;
+            float br[4];
+            bar_rect(i, br);
+            plate_span(br, FX_X0, FX_X1, 55);
         }
-        plate_span(br, run_a, FX_X1, run_alpha);
-    }
+    if (g_nrip == 0 || !g_tex_field[0] || !g_tex_stencil) return;
+    /* поле ряби, растянутое GPU, и трафарет поверх */
+    vita2d_texture *t = g_tex_field[g_field_next];
+    g_field_next = (g_field_next + 1) % N_FIELD_TEX;
+    field_render();
+    upload(t, &g_cv_field);
+    vita2d_draw_texture_scale(t, PLATE_X - FIELD_DIV, PLATE_Y - FIELD_DIV, FIELD_DIV, FIELD_DIV);
+    vita2d_draw_texture(g_tex_stencil, PLATE_X, PLATE_Y);
 }
 
 static void fx_update(float dt) {
@@ -564,19 +645,17 @@ void ui_set_held(const int *kinds, const int *indices, int n) {
 void ui_flash_zone(int zone, float x) {
     if (zone < 0 || zone >= g_map.nzones) return;
     float y = (strum_string_y(g_map.zone_lo[zone]) + strum_string_y(g_map.zone_hi[zone])) * 0.5f;
-    if (x < FX_X0) x = FX_X0;                /* струна звенит от места удара (или от начала полосы) */
-    ripple_add(x, y, 0.5f, 230.0f, 7.0f, 0.26f);
+    ripple_add(x, y, 0.55f, 230.0f, 8.0f, 0.30f, PAL_COOL);
 }
 
 void ui_touch_glow(float x, float y, int down) {
-    if (x < FX_X0) x = FX_X0;
     if (down) {                              /* касание: сильный всплеск */
-        ripple_add(x, y, 0.95f, 280.0f, 11.0f, 0.38f);
+        ripple_add(x, y, 1.0f, 260.0f, 13.0f, 0.45f, PAL_WARM);
         g_trail_t = 0.0f;
         return;
     }
     if (g_trail_t >= 0.05f) {                /* след за пальцем: небольшая рябь каждые 50 мс */
-        ripple_add(x, y, 0.3f, 150.0f, 8.0f, 0.2f);
+        ripple_add(x, y, 0.4f, 150.0f, 9.0f, 0.24f, PAL_WARM);
         g_trail_t = 0.0f;
     }
 }

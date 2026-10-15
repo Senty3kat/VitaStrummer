@@ -114,6 +114,12 @@ void vita2d_draw_texture_tint_scale(const vita2d_texture *t, float x, float y, f
         }
 }
 
+void vita2d_draw_texture_scale(const vita2d_texture *t, float x, float y, float sx, float sy) {
+    vita2d_draw_texture_tint_scale(t, x, y, sx, sy, 0xFFFFFFFFu);
+}
+
+void vita2d_texture_set_filters(const vita2d_texture *t, SceGxmTextureFilter mn, SceGxmTextureFilter mg) { (void)t; (void)mn; (void)mg; }
+
 void vita2d_draw_rectangle(float x, float y, float w, float h, unsigned int color) {
     for (int j = (int)y; j < (int)(y + h); j++)
         for (int i = (int)x; i < (int)(x + w); i++) blend(i, j, color);
