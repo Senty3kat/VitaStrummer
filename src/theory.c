@@ -68,11 +68,38 @@ const char *mod_long(int mod) {
     return (mod >= 0 && mod < N_MODS) ? L[mod] : "";
 }
 
+/* сколько разных звуков в аккорде (add9 - четыре, девятая как вторая ступень) */
+static int mask_count(int mask) {
+    int n = 0;
+    for (int i = 0; i < 12; i++) n += (mask >> i) & 1;
+    return n;
+}
+
+/* следующий звук аккорда строго выше note */
+static int next_in_mask(int note, int mask) {
+    for (int d = 1; d <= 12; d++) if (mask & (1 << ((note + d) % 12))) return note + d;
+    return note + 12;
+}
+
 void stringmap_build(StringMap *m, int chord_on, int root, int mod, int base) {
     int mask = chord_on ? chord_mask(root, mod) : 0xFFF;
+    /* В аккорде струны идут парами: каждая пара - следующий звук аккорда вверх.
+     * 25 струн = 13 звуков; у трезвучия это больше четырёх октав (как у Omnichord),
+     * середина диапазона - около середины клавиатуры (base + 12). */
+    int tones = (N_STRINGS + CHORD_SPREAD - 1) / CHORD_SPREAD;
+    int cur = 0;
+    if (chord_on) {
+        int span = tones * 12 / mask_count(mask);
+        cur = snap_to_mask(base + 12 - span / 2, mask);
+    }
     m->nzones = 0;
     for (int i = 0; i < N_STRINGS; i++) {
-        int nt = snap_to_mask(base + i, mask);
+        int nt;
+        if (!chord_on) nt = base + i;
+        else {
+            if (i > 0 && i % CHORD_SPREAD == 0) cur = next_in_mask(cur, mask);
+            nt = cur;
+        }
         m->note[i] = nt;
         if (m->nzones == 0 || m->zone_note[m->nzones - 1] != nt) {
             m->zone_lo[m->nzones] = i;

@@ -90,6 +90,30 @@ void vita2d_draw_texture_tint(const vita2d_texture *t, float x, float y, unsigne
     vita2d_draw_texture_tint_part(t, x, y, 0, 0, (float)t->w, (float)t->h, color);
 }
 
+/* масштаб с билинейной выборкой - как сглаживает GPU */
+void vita2d_draw_texture_tint_scale(const vita2d_texture *t, float x, float y, float sx, float sy, unsigned int color) {
+    int w = (int)ceilf(t->w * sx), h = (int)ceilf(t->h * sy);
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++) {
+            float u = ((float)i + 0.5f) / sx - 0.5f, v = ((float)j + 0.5f) / sy - 0.5f;
+            int u0 = (int)floorf(u), v0 = (int)floorf(v);
+            float fu = u - u0, fv = v - v0;
+            float acc[4] = { 0, 0, 0, 0 };
+            for (int k = 0; k < 4; k++) {
+                int uu = u0 + (k & 1), vv = v0 + (k >> 1);
+                if (uu < 0) uu = 0;
+                if (vv < 0) vv = 0;
+                if (uu >= (int)t->w) uu = t->w - 1;
+                if (vv >= (int)t->h) vv = t->h - 1;
+                float wgt = ((k & 1) ? fu : 1 - fu) * ((k >> 1) ? fv : 1 - fv);
+                uint32_t p = t->px[vv * t->w + uu];
+                for (int c = 0; c < 4; c++) acc[c] += wgt * (float)((p >> (8 * c)) & 255);
+            }
+            uint32_t s = RGBA8((int)acc[0], (int)acc[1], (int)acc[2], (int)acc[3]);
+            blend((int)lroundf(x) + i, (int)lroundf(y) + j, mul_col(s, color));
+        }
+}
+
 void vita2d_draw_rectangle(float x, float y, float w, float h, unsigned int color) {
     for (int j = (int)y; j < (int)(y + h); j++)
         for (int i = (int)x; i < (int)(x + w); i++) blend(i, j, color);

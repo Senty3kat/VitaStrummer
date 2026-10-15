@@ -25,7 +25,10 @@ enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_CENTER, HIT_PLATE, HIT_MODE, HIT_OCT
 int  ui_init(void);
 void ui_recreate(void);                              /* после "сна": текстуры заново */
 void ui_set_state(const AppState *s, const StringMap *m);
-void ui_flash_zone(int zone);
+/* зона зазвучала: струны загораются от x (точка касания) и разливаются вдоль себя */
+void ui_flash_zone(int zone, float x);
+/* палец на струнной панели (каждый кадр): светящийся след; down = 1 в первый кадр касания */
+void ui_touch_glow(float x, float y, int down);
 /* index: тоника (высота 0..11), модификатор, режим, или шаг октавы (-1 / +1) */
 int  ui_hit(float x, float y, int *index);
 /* какие кнопки сейчас зажаты пальцами (для "нажатого" вида) */

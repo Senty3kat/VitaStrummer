@@ -42,8 +42,6 @@
 #define C_NAVY_SOFT  RGBA8(80, 96, 112, 255)
 #define C_LCD_TEXT   RGBA8(246, 236, 214, 255)
 #define C_LCD_DIM    RGBA8(150, 172, 190, 255)
-#define C_LABEL      RGBA8(198, 208, 218, 255)
-#define C_LABEL_DIM  RGBA8(132, 152, 170, 255)
 #define C_DEBUG      RGBA8(150, 132, 110, 255)
 #define C_ORANGE     RGBA8(222, 122, 50, 255)
 #define WHITE_A(a)   RGBA8(255, 255, 255, (a))
@@ -71,7 +69,6 @@ static vita2d_pgf *g_pgf = NULL;
 
 static AppState g_st;
 static StringMap g_map;
-static float g_flash[N_STRINGS];
 static int g_held_kind[MAX_FINGERS], g_held_idx[MAX_FINGERS], g_held_n = 0;
 
 /* ---------- геометрия колеса ---------- */
@@ -294,6 +291,7 @@ static int make_led(Sprite *sp, int on) {
     return 1;
 }
 
+
 static int build_all(void) {
     if (!canvas_alloc(&g_cv_bg, SCR_W, SCR_H)) return 0;
     paint_bg(&g_cv_bg);
@@ -383,35 +381,84 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
                                   RGBA8(255, 255, 255, alpha));
 }
 
-/* подсветка полосы: оранжевый плавно нарастает вдоль нити (полосками), дальше - ровно */
-#define LIT_FADE_STEPS 10
-#define LIT_FADE_W 3.0f
-static void draw_bar_lit(const float r[4], unsigned alpha) {
-    float x = r[0];
-    for (int k = 0; k < LIT_FADE_STEPS; k++, x += LIT_FADE_W) {
-        float s[4] = { x, r[1], LIT_FADE_W, r[3] };
-        draw_plate_part(PL_LIT, s, alpha * (unsigned)(k + 1) / (LIT_FADE_STEPS + 1));
+/* ---------- "жидкая" подсветка ----------
+ * Из точки касания расходится мягкое кольцо-рябь, а струны показывают его срез: на панели
+ * видна круглая волна, нарезанная струнами (как на эскизах). За фронтом волна гаснет.
+ * Каждая струна рисуется кусками "горящей" панели с прозрачностью по яркости ряби. */
+#define FX_X0 (BULB_X1 - 30.0f)            /* где на струне может гореть подсветка */
+#define FX_X1 (BAR_X1 + 1.0f)
+#define FX_SLICE 6.0f                      /* шаг кусков вдоль струны */
+#define MAX_RIPPLES 24
+
+typedef struct { float x, y, age, amp, speed, width, tau; } Ripple;
+static Ripple g_rip[MAX_RIPPLES];
+static int g_nrip = 0;
+static float g_trail_t = 0.0f;             /* время с последней ряби следа */
+
+static void ripple_add(float x, float y, float amp, float speed, float width, float tau) {
+    Ripple *r;
+    if (g_nrip < MAX_RIPPLES) r = &g_rip[g_nrip++];
+    else {                                 /* места нет - заменяем самую слабую */
+        r = &g_rip[0];
+        for (int i = 1; i < MAX_RIPPLES; i++)
+            if (g_rip[i].amp * expf(-g_rip[i].age / g_rip[i].tau) < r->amp * expf(-r->age / r->tau)) r = &g_rip[i];
     }
-    float rest[4] = { x, r[1], r[0] + r[2] - x, r[3] };
-    draw_plate_part(PL_LIT, rest, alpha);
+    r->x = x; r->y = y; r->age = 0.0f; r->amp = amp; r->speed = speed; r->width = width; r->tau = tau;
+}
+
+/* яркость ряби в точке: мягкая сердцевина + расходящееся кольцо */
+static float ripple_at(float x, float y) {
+    float b = 0.0f;
+    for (int i = 0; i < g_nrip; i++) {
+        const Ripple *r = &g_rip[i];
+        float dx = x - r->x, dy = y - r->y, d = sqrtf(dx * dx + dy * dy);
+        float fade = r->amp * expf(-r->age / r->tau);
+        float R = r->speed * r->age, w = r->width + 0.25f * R;
+        float ring = (d - R) / w;
+        float core = d / (r->width * 1.4f);
+        float v = fade * (expf(-ring * ring) + 0.6f * expf(-r->age / (r->tau * 0.4f)) * expf(-core * core));
+        if (v > b) b = v;                    /* перекрытия не складываются - видны отдельные кольца */
+    }
+    if (b > 1.0f) b = 1.0f;
+    return powf(b, 0.7f);                    /* насыщеннее в середине волны, мягко у краёв */
+}
+
+static void plate_span(const float br[4], float a, float b, unsigned alpha) {
+    if (b - a < 0.5f || alpha == 0) return;
+    float r[4] = { a, br[1], b - a, br[3] };
+    draw_plate_part(PL_LIT, r, alpha);
 }
 
 static void draw_plate(void) {
-    int base = STRING_BASE_NOTE + 12 * g_st.octave;
-    int mask = g_st.chord_on ? chord_mask(g_st.root, g_st.mod) : 0;
-    /* клавиши всегда одного цвета; подсвечиваются только полосы струн:
-     * слабо - звуки аккорда, ярко - вспышка при игре */
     for (int i = 0; i < N_STRINGS; i++) {
         float br[4];
         bar_rect(i, br);
-        unsigned a = 0;
-        if (g_st.chord_on && ((mask >> ((base + i) % 12)) & 1)) a = 60;
-        if (g_flash[i] > 0.01f) {
-            unsigned fa = (unsigned)(g_flash[i] * 255.0f);
-            if (fa > a) a = fa;
+        /* в аккорде слабо горят струны с тоникой */
+        unsigned base_a = (g_st.chord_on && ((g_map.note[i] % 12 + 12) % 12) == g_st.root) ? 55 : 0;
+        if (g_nrip == 0) { plate_span(br, FX_X0, FX_X1, base_a); continue; }
+        float ys = strum_string_y(i);
+        /* соседние куски с одинаковой яркостью склеиваются в один */
+        float run_a = FX_X0;
+        unsigned run_alpha = 0;
+        for (float x = FX_X0; x < FX_X1; x += FX_SLICE) {
+            float xe = x + FX_SLICE > FX_X1 ? FX_X1 : x + FX_SLICE;
+            unsigned a = (unsigned)(ripple_at((x + xe) * 0.5f, ys) * 255.0f);
+            if (a < base_a) a = base_a;
+            a &= ~7u;                       /* ступени по 8 - меньше кусков, глазом не видно */
+            if (a != run_alpha) { plate_span(br, run_a, x, run_alpha); run_a = x; run_alpha = a; }
         }
-        draw_bar_lit(br, a);
+        plate_span(br, run_a, FX_X1, run_alpha);
     }
+}
+
+static void fx_update(float dt) {
+    int n = 0;
+    for (int i = 0; i < g_nrip; i++) {
+        g_rip[i].age += dt;
+        if (g_rip[i].amp * expf(-g_rip[i].age / g_rip[i].tau) > 0.02f) g_rip[n++] = g_rip[i];
+    }
+    g_nrip = n;
+    g_trail_t += dt;
 }
 
 static void draw_wheel(void) {
@@ -484,19 +531,9 @@ static void draw_header(const UiDebug *dbg) {
     }
 }
 
-static void draw_labels(void) {
-    char buf[16];
-    int base = STRING_BASE_NOTE + 12 * g_st.octave;
-    for (int i = 0; i < N_STRINGS; i++) {
-        note_name(buf, sizeof(buf), g_map.note[i]);
-        int exact = g_map.note[i] == base + i;
-        text_at(LABEL_X, strum_string_y(i) + 4.5f, exact ? C_LABEL : C_LABEL_DIM, 0.6f, buf, 0);
-    }
-}
-
 /* ---------- внешний интерфейс ---------- */
 int ui_init(void) {
-    memset(g_flash, 0, sizeof(g_flash));
+    g_nrip = 0;
     memset(&g_st, 0, sizeof(g_st));
     stringmap_build(&g_map, 0, 0, 0, STRING_BASE_NOTE);
     if (!build_all()) return 0;
@@ -524,9 +561,24 @@ void ui_set_held(const int *kinds, const int *indices, int n) {
     g_held_n = n;
 }
 
-void ui_flash_zone(int zone) {
+void ui_flash_zone(int zone, float x) {
     if (zone < 0 || zone >= g_map.nzones) return;
-    for (int s = g_map.zone_lo[zone]; s <= g_map.zone_hi[zone]; s++) g_flash[s] = 1.0f;
+    float y = (strum_string_y(g_map.zone_lo[zone]) + strum_string_y(g_map.zone_hi[zone])) * 0.5f;
+    if (x < FX_X0) x = FX_X0;                /* струна звенит от места удара (или от начала полосы) */
+    ripple_add(x, y, 0.5f, 230.0f, 7.0f, 0.26f);
+}
+
+void ui_touch_glow(float x, float y, int down) {
+    if (x < FX_X0) x = FX_X0;
+    if (down) {                              /* касание: сильный всплеск */
+        ripple_add(x, y, 0.95f, 280.0f, 11.0f, 0.38f);
+        g_trail_t = 0.0f;
+        return;
+    }
+    if (g_trail_t >= 0.05f) {                /* след за пальцем: небольшая рябь каждые 50 мс */
+        ripple_add(x, y, 0.3f, 150.0f, 8.0f, 0.2f);
+        g_trail_t = 0.0f;
+    }
 }
 
 int ui_hit(float x, float y, int *index) {
@@ -560,8 +612,7 @@ int ui_hit(float x, float y, int *index) {
 }
 
 void ui_draw(float dt, const UiDebug *dbg) {
-    float k = expf(-dt / 0.14f);
-    for (int s = 0; s < N_STRINGS; s++) g_flash[s] *= k;
+    fx_update(dt);
 
     vita2d_start_drawing();
     vita2d_clear_screen();
@@ -569,7 +620,6 @@ void ui_draw(float dt, const UiDebug *dbg) {
     draw_plate();
     draw_wheel();
     draw_header(dbg);
-    draw_labels();
     vita2d_end_drawing();
     vita2d_swap_buffers();
 }

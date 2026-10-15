@@ -1,5 +1,5 @@
 /*
- * Vita Strummer - версия 0.2
+ * Vita Strummer - версия 0.3
  *
  * Слева колесо: большой круг - тоника, малый - модификатор аккорда.
  *   Касание тоники - аккорд "залипает"; повторное касание той же тоники - сброс.
@@ -81,11 +81,14 @@ static void apply_state(void) {
     send_pad();
 }
 
+/* x пальца в прошлом и текущем кадре: по доле кадра находим, где именно задета струна */
+static float g_hit_x0, g_hit_x1;
+
 static void on_strum(int zone, float frac, void *user) {
     (void)user;
     int delay = (int)(frac * g_frame_dt * (float)SYNTH_RATE);
     audio_strum(smap.zone_note[zone], delay);
-    ui_flash_zone(zone);
+    ui_flash_zone(zone, g_hit_x0 + (g_hit_x1 - g_hit_x0) * frac);
 }
 
 static StrumFinger *finger_find(int id) {
@@ -199,13 +202,24 @@ int main(void) {
             for (int j = 0; j < prev_n; j++) if (prev_ids[j] == id) is_new = 0;
 
             StrumFinger *f = finger_find(id);
-            if (f) { strum_move(f, strum_pos_from_xy(x, y), &smap, on_strum, NULL); continue; }
+            if (f) {
+                g_hit_x0 = f->x; g_hit_x1 = x;
+                strum_move(f, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
+                f->x = x;
+                ui_touch_glow(x, y, 0);
+                continue;
+            }
             if (!is_new) continue;
 
             int idx, kind = ui_hit(x, y, &idx);
             if (kind == HIT_PLATE) {
                 StrumFinger *fr = finger_find(-1);
-                if (fr) strum_down(fr, id, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
+                if (fr) {
+                    g_hit_x0 = g_hit_x1 = x;
+                    fr->x = x;
+                    strum_down(fr, id, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
+                    ui_touch_glow(x, y, 1);
+                }
             } else if (touch_down_ui(kind, idx)) {
                 Held *h = held_find(-1);
                 if (h) { h->id = id; h->kind = kind; h->idx = idx; }

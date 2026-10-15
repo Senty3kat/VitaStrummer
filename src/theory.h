@@ -8,6 +8,7 @@
 #define N_MODS 9
 #define N_STRINGS 25
 #define STRING_BASE_NOTE 60      /* нижняя струна при октаве 0 - C4 (MIDI 60), верхняя - C6 */
+#define CHORD_SPREAD 2           /* в аккорде: сколько соседних струн играют один звук */
 #define OCT_MIN (-2)
 #define OCT_MAX 2
 #define MAX_CHORD 6
@@ -34,8 +35,10 @@ int pad_voicing(int root, int mod, int *notes);
 void chord_name(char *out, size_t cap, int root, int mod);
 void note_name(char *out, size_t cap, int midi);   /* "C#4" */
 
-/* Раскладка струн. Соседние струны с одинаковой нотой объединяются в "зону":
- * при стрaме зона звучит один раз. Без аккорда каждая струна - своя зона (хроматика). */
+/* Раскладка струн. Без аккорда каждая струна - своя нота (хроматика от base).
+ * С аккордом струны идут парами (CHORD_SPREAD), каждая пара - следующий звук аккорда вверх,
+ * так диапазон получается шире клавиатуры. Соседние струны с одинаковой нотой - одна "зона":
+ * при стрaме она звучит один раз. */
 typedef struct {
     int note[N_STRINGS];          /* какая нота звучит на струне i (0 - нижняя) */
     int zone_of[N_STRINGS];

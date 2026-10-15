@@ -25,6 +25,7 @@ float strum_pos_from_xy(float x, float y);
 typedef struct {
     int id;          /* id касания от тачпада, -1 - свободно */
     float pos;
+    float x;         /* последняя экранная x (для подсветки от точки касания) */
     int zone;
 } StrumFinger;
 

@@ -33,12 +33,30 @@ static void test_theory(void) {
     CHECK(m.nzones == N_STRINGS);
     CHECK(m.note[0] == 60 && m.note[24] == 84);
 
-    stringmap_build(&m, 1, 0, 0, 60);    /* C: C4..C6 -> C E G C E G C E G C = 7 + ... */
-    printf("C major zones: %d ->", m.nzones);
-    for (int z = 0; z < m.nzones; z++) { note_name(b, sizeof(b), m.zone_note[z]); printf(" %s(%d)", b, m.zone_hi[z] - m.zone_lo[z] + 1); }
+    /* в любом аккорде: не больше двух струн подряд на звук, только звуки аккорда, строго вверх,
+     * диапазон шире клавиатуры (у трезвучий - больше 4 октав) */
+    for (int root = 0; root < 12; root++)
+        for (int mod = 0; mod < N_MODS; mod++) {
+            stringmap_build(&m, 1, root, mod, 60);
+            int mask = chord_mask(root, mod);
+            CHECK(m.nzones == (N_STRINGS + CHORD_SPREAD - 1) / CHORD_SPREAD);
+            for (int z = 0; z < m.nzones; z++) {
+                CHECK(m.zone_hi[z] - m.zone_lo[z] + 1 <= 2);
+                CHECK(mask & (1 << (m.zone_note[z] % 12)));
+                if (z) CHECK(m.zone_note[z] > m.zone_note[z - 1]);
+            }
+            int span = m.zone_note[m.nzones - 1] - m.zone_note[0];
+            CHECK(span > 24);
+            if (mod <= 3) CHECK(span >= 45);
+            CHECK(m.zone_note[0] >= 40 && m.zone_note[m.nzones - 1] <= 108);   /* слышимый диапазон */
+        }
+    stringmap_build(&m, 1, 0, 0, 60);
+    printf("C major:");
+    for (int z = 0; z < m.nzones; z++) { note_name(b, sizeof(b), m.zone_note[z]); printf(" %s", b); }
+    printf("\nAm7:    ");
+    stringmap_build(&m, 1, 9, 6, 60);
+    for (int z = 0; z < m.nzones; z++) { note_name(b, sizeof(b), m.zone_note[z]); printf(" %s", b); }
     printf("\n");
-    CHECK(m.nzones == 7);
-    for (int z = 1; z < m.nzones; z++) CHECK(m.zone_note[z] > m.zone_note[z - 1]);
 
     int nt[MAX_CHORD], n = pad_voicing(7, 4, nt);    /* G7 */
     CHECK(n == 4 && nt[0] == 43 && nt[3] == 53);
@@ -126,7 +144,7 @@ static void wav_write(const char *path, const int16_t *s, int n) {
 
 /* звук: хроматический свайп, стрaм C и Am7, затем пэд C -> G7 -> Am7 -> тишина */
 static void test_synth(void) {
-    const int G = 256, total = SYNTH_RATE * 12;
+    const int G = 256, total = SYNTH_RATE * 16;
     int16_t *out = calloc((size_t)total, 2);
     synth_init();
     int pos = 0, clip = 0;
