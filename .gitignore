@@ -1,0 +1,4 @@
+build/
+host/out/
+host/tests
+host/preview

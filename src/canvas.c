@@ -183,6 +183,44 @@ void cv_ribbon_grad(Canvas *c, float x0, float y0, float t0, float x1, float y1,
     }
 }
 
+void cv_strand(Canvas *c, float x0, float y0, float t0, float x1, float y1, float t1, float tstart, float x2, uint32_t col) {
+    float r = t1 * 0.5f, xe = x2 - r;               /* центр скругления на конце */
+    int ix0 = (int)floorf(x0), ix1 = (int)ceilf(x2) + 1;
+    for (int px = ix0; px < ix1; px++) {
+        float fx = (float)px + 0.5f;
+        float yc, half, slope = 0.0f;
+        if (fx < x1) {
+            float u = fclampf((fx - x0) / (x1 - x0), 0.0f, 1.0f);
+            float sm = u * u * (3.0f - 2.0f * u);
+            slope = (y1 - y0) * 6.0f * u * (1.0f - u) / (x1 - x0);
+            yc = y0 + (y1 - y0) * sm;
+            float v = fclampf((u - tstart) / (1.0f - tstart), 0.0f, 1.0f);
+            float tv = v * v * (3.0f - 2.0f * v);
+            half = 0.5f * (t0 + (t1 - t0) * tv) * sqrtf(1.0f + slope * slope);
+        } else {
+            yc = y1;
+            half = r;
+            if (fx > xe) {                           /* скругление: полукруг */
+                float dx = fx - xe;
+                if (dx >= r + 0.5f) continue;
+                half = dx < r ? sqrtf(r * r - dx * dx) : 0.0f;
+                float edge = fclampf(r + 0.5f - dx, 0.0f, 1.0f);   /* сглаживание по горизонтали */
+                int py0 = (int)floorf(yc - half) - 1, py1 = (int)ceilf(yc + half) + 1;
+                for (int py = py0; py < py1; py++) {
+                    float cov = fclampf(half - fabsf((float)py + 0.5f - yc) + 0.5f, 0.0f, 1.0f) * edge;
+                    if (cov > 0.0f) cv_put(c, px, py, col, cov);
+                }
+                continue;
+            }
+        }
+        int py0 = (int)floorf(yc - half) - 1, py1 = (int)ceilf(yc + half) + 1;
+        for (int py = py0; py < py1; py++) {
+            float cov = fclampf(half - fabsf((float)py + 0.5f - yc) + 0.5f, 0.0f, 1.0f);
+            if (cov > 0.0f) cv_put(c, px, py, col, cov);
+        }
+    }
+}
+
 void cv_star(Canvas *c, float cx, float cy, float r, float waist, uint32_t col) {
     /* многоугольник: 4 вершины-луча и 4 внутренние точки по диагоналям, веером от центра */
     float tip[4][2], in[4][2];

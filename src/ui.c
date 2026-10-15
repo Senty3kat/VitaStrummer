@@ -2,10 +2,10 @@
  *
  * Всё объёмное рисуется процессором один раз при запуске:
  *   - фон целиком (корпус, капсула, табло, колесо, струнная панель со струнами);
- *   - ещё два варианта струнной панели: "горящий" (оранжевый) и "приглушённый";
+ *   - "горящий" (оранжевый) вариант струнной панели для подсветки и вспышек струн;
  *   - спрайты каждой кнопки колеса во всех состояниях, светодиоды.
- * В кадре GPU только накладывает готовые текстуры (и куски панелей для подсветки
- * клавиш и вспышек струн), поэтому смена аккорда не стоит ни миллисекунды процессора. */
+ * В кадре GPU только накладывает готовые текстуры (и куски "горящей" панели для
+ * струн), поэтому смена аккорда не стоит ни миллисекунды процессора. */
 #include "ui.h"
 #include "canvas.h"
 #include "layout.h"
@@ -37,8 +37,6 @@
 #define C_PEACH_TOP  RGBA8(246, 220, 190, 255)
 #define C_PEACH_BOT  RGBA8(234, 192, 150, 255)
 #define C_PEACH_EDGE RGBA8(186, 146, 106, 255)
-#define C_DIM_TOP    RGBA8(146, 160, 170, 255)
-#define C_DIM_BOT    RGBA8(122, 138, 150, 255)
 #define C_SHADOW     RGBA8(16, 26, 38, 120)
 #define C_NAVY       RGBA8(24, 54, 78, 255)
 #define C_NAVY_SOFT  RGBA8(80, 96, 112, 255)
@@ -61,7 +59,7 @@ static const Skin SK_PEACH = { C_PEACH_EDGE, C_PEACH_TOP, C_PEACH_BOT };
 /* ---------- текстуры ---------- */
 typedef struct { Canvas cv; vita2d_texture *tex; float x, y; } Sprite;
 
-enum { PL_NORMAL = 0, PL_LIT, PL_DIM, PL_N };
+enum { PL_NORMAL = 0, PL_LIT, PL_N };
 enum { ST_NORMAL = 0, ST_SEL, ST_ARMED, ST_N };
 
 static Canvas g_cv_bg;
@@ -154,67 +152,39 @@ static void engrave(Canvas *c, SdfFn f, const void *ctx, Box bb, uint32_t top, u
 }
 
 /* ---------- струнная панель ---------- */
-typedef struct { uint32_t key_top, key_bot, bar_top, bar_bot; } PlateSkin;
+/* Всё на панели одного ровного цвета, как в первом концепте. Рисуется в два прохода:
+ * сначала тени всех струн, потом сами струны - так тень одной клавиши не ложится на соседнюю. */
+typedef struct { uint32_t col; } PlateSkin;
 
-/* белая клавиша - одна фигура из двух частей, чтобы градиент шёл без ступеньки */
-typedef struct { SdfRRect a, b; } SdfUnion2;
-static float sdf_union2(float x, float y, const void *ctx) {
-    const SdfUnion2 *u = (const SdfUnion2 *)ctx;
-    return fminf(sdf_rrect(x, y, &u->a), sdf_rrect(x, y, &u->b));
-}
-
-/* одна струна: клавиша -> сужение в нить -> S-переход -> расширение -> полоса */
-static void paint_string(Canvas *c, float ox, float oy, int i, const PlateSkin *k) {
-    float yc = key_center_y(i) - oy, ys = strum_string_y(i) - oy;
+/* одна струна: клавиша -> сужение в нить -> S-переход -> плавное расширение -> полоса.
+ * dy - сдвиг (для тени), col - цвет */
+static void paint_string(Canvas *c, float ox, float oy, int i, float dy, uint32_t col) {
+    float yc = key_center_y(i) - oy + dy, ys = strum_string_y(i) - oy + dy;
     if (key_is_black(i)) {
-        cv_rrect(c, BK_X0 - ox, yc - BK_H / 2.0f + 1.5f, BK_X1 - BK_X0, BK_H, 3, DARK_A(55));
-        cv_rrect_grad(c, BK_X0 - ox, yc - BK_H / 2.0f, BK_X1 - BK_X0, BK_H, 3, k->key_top, k->key_bot);
-        cv_ribbon_grad(c, BK_X1 - 3 - ox, yc, BK_H, BK_X1 + 16 - ox, yc, LINE_T, k->key_top, k->key_bot);
-        cv_ribbon(c, BK_X1 + 14 - ox, yc, LINE_T, NECK_X1 + 1 - ox, yc, LINE_T, k->key_bot);
+        cv_rrect(c, BK_X0 - ox, yc - BK_H / 2.0f, BK_X1 - BK_X0 + 3, BK_H, 2.5f, col);
+        cv_ribbon(c, BK_X1 - ox, yc, BK_H, BK_NECK - ox, yc, LINE_T, col);
+        cv_ribbon(c, BK_NECK - 1 - ox, yc, LINE_T, NECK_X1 + 1 - ox, yc, LINE_T, col);
     } else {
         float y0, y1, b0, b1;
         white_key_extents(i, &y0, &y1, &b0, &b1);
-        SdfUnion2 u = { { WK_X0 - ox, b0 - oy, WK_XF - WK_X0 + 6, b1 - b0, 3 },
-                        { WK_XF - ox, y0 - oy, WK_X1 - WK_XF, y1 - y0, 3 } };
-        Box bb = { WK_X0 - ox, y0 - oy, WK_X1 - ox, y1 - oy };
-        cv_sdf_fill(c, sdf_union2, &u, bb, 0, 0, 1.5f, 0, DARK_A(55), DARK_A(55));
-        cv_sdf_fill(c, sdf_union2, &u, bb, 0, 0, 0, 0, k->key_top, k->key_bot);
-        cv_ribbon_grad(c, WK_X1 - 3 - ox, yc, y1 - y0, NECK_X1 - ox, yc, LINE_T, k->key_top, k->key_bot);
+        cv_rrect(c, WK_X0 - ox, b0 - oy + dy, WK_XF - WK_X0 + 4, b1 - b0, 2.5f, col);    /* задняя часть */
+        cv_rrect(c, WK_XF - ox, y0 - oy + dy, WK_X1 - WK_XF + 3, y1 - y0, 2.5f, col);     /* передняя */
+        cv_ribbon(c, WK_X1 - ox, yc, y1 - y0, NECK_X1 - ox, yc, LINE_T, col);
     }
-    cv_ribbon(c, NECK_X1 - 1 - ox, yc, LINE_T, ROUTE_X1 - ox, ys, LINE_T, k->key_bot);
-    cv_ribbon(c, ROUTE_X1 - 1 - ox, ys + 1.5f, LINE_T, BULB_X1 - ox, ys + 1.5f, BAR_H, DARK_A(50));   /* тень */
-    cv_ribbon_grad(c, ROUTE_X1 - 1 - ox, ys, LINE_T, BULB_X1 - ox, ys, BAR_H, k->bar_top, k->bar_bot);
-    cv_rrect(c, BULB_X1 - 4 - ox, ys - BAR_H / 2.0f + 1.5f, BAR_X1 - BULB_X1 + 4, BAR_H, BAR_H / 2.0f, DARK_A(50));
-    cv_rrect_grad(c, BULB_X1 - 4 - ox, ys - BAR_H / 2.0f, BAR_X1 - BULB_X1 + 4, BAR_H, BAR_H / 2.0f, k->bar_top, k->bar_bot);
-    cv_rrect(c, BULB_X1 + 2 - ox, ys - BAR_H / 2.0f + 2.0f, BAR_X1 - BULB_X1 - 10, 2.0f, 1.0f, WHITE_A(70));   /* блик */
+    cv_strand(c, NECK_X1 - 1 - ox, yc, LINE_T, BULB_X1 - ox, ys, BAR_H, BULB_TSTART, BAR_X1 - ox, col);
 }
 
 static void paint_strings(Canvas *c, float ox, float oy, const PlateSkin *k) {
-    for (int i = 0; i < N_STRINGS; i++) paint_string(c, ox, oy, i, k);
+    for (int i = 0; i < N_STRINGS; i++) paint_string(c, ox, oy, i, 1.6f, DARK_A(45));
+    for (int i = 0; i < N_STRINGS; i++) paint_string(c, ox, oy, i, 0.0f, k->col);
 }
 
-static const PlateSkin PS_NORMAL = { RGBA8(240, 230, 210, 255), RGBA8(220, 205, 180, 255),
-                                     RGBA8(240, 230, 210, 255), RGBA8(216, 200, 174, 255) };
-static const PlateSkin PS_LIT = { C_OR_TOP, C_OR_BOT, C_OR_TOP, C_OR_BOT };
-static const PlateSkin PS_DIM = { C_DIM_TOP, C_DIM_BOT, C_DIM_TOP, C_DIM_BOT };
-
-/* прямоугольники клавиши (для подсветки кусками текстуры), экранные координаты */
-static int key_rects(int i, float r[2][4]) {
-    float yc = key_center_y(i);
-    if (key_is_black(i)) {
-        r[0][0] = BK_X0 - 1; r[0][1] = yc - BK_H / 2.0f - 1; r[0][2] = BK_X1 + 18 - (BK_X0 - 1); r[0][3] = BK_H + 2;
-        return 1;
-    }
-    float y0, y1, b0, b1;
-    white_key_extents(i, &y0, &y1, &b0, &b1);
-    r[0][0] = WK_X0 - 1; r[0][1] = b0 - 0.5f; r[0][2] = WK_XF - (WK_X0 - 1); r[0][3] = b1 - b0 + 1;
-    r[1][0] = WK_XF; r[1][1] = y0 - 0.5f; r[1][2] = NECK_X1 - WK_XF; r[1][3] = y1 - y0 + 1;
-    return 2;
-}
-
+static const PlateSkin PS_NORMAL = { RGBA8(233, 221, 198, 255) };
+static const PlateSkin PS_LIT = { RGBA8(228, 132, 64, 255) };
+/* прямоугольник полосы струны (для подсветки куском "горящей" панели), экранные координаты */
 static void bar_rect(int i, float r[4]) {
     float ys = strum_string_y(i);
-    r[0] = ROUTE_X1 + 4; r[1] = ys - BAR_H / 2.0f - 1.5f; r[2] = BAR_X1 + 2 - r[0]; r[3] = BAR_H + 4;
+    r[0] = BULB_X1 - 34; r[1] = ys - BAR_H / 2.0f - 1.0f; r[2] = BAR_X1 + 2 - r[0]; r[3] = BAR_H + 3;
 }
 
 /* ---------- фон ---------- */
@@ -328,12 +298,12 @@ static int build_all(void) {
     if (!canvas_alloc(&g_cv_bg, SCR_W, SCR_H)) return 0;
     paint_bg(&g_cv_bg);
 
-    /* варианты панели: копия фона в границах панели + струны другим цветом */
+    /* "горящая" панель: копия фона в границах панели + струны оранжевым */
     for (int v = PL_LIT; v < PL_N; v++) {
         if (!canvas_alloc(&g_cv_plate[v], PLATE_W, PLATE_H)) return 0;
         for (int y = 0; y < PLATE_H; y++)
             memcpy(g_cv_plate[v].px + (size_t)y * PLATE_W, g_cv_bg.px + (size_t)(y + PLATE_Y) * SCR_W + PLATE_X, (size_t)PLATE_W * 4);
-        paint_strings(&g_cv_plate[v], PLATE_X, PLATE_Y, v == PL_LIT ? &PS_LIT : &PS_DIM);
+        paint_strings(&g_cv_plate[v], PLATE_X, PLATE_Y, &PS_LIT);
     }
 
     for (int i = 0; i < N_ROOTS; i++) {
@@ -413,23 +383,34 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
                                   RGBA8(255, 255, 255, alpha));
 }
 
+/* подсветка полосы: оранжевый плавно нарастает вдоль нити (полосками), дальше - ровно */
+#define LIT_FADE_STEPS 10
+#define LIT_FADE_W 3.0f
+static void draw_bar_lit(const float r[4], unsigned alpha) {
+    float x = r[0];
+    for (int k = 0; k < LIT_FADE_STEPS; k++, x += LIT_FADE_W) {
+        float s[4] = { x, r[1], LIT_FADE_W, r[3] };
+        draw_plate_part(PL_LIT, s, alpha * (unsigned)(k + 1) / (LIT_FADE_STEPS + 1));
+    }
+    float rest[4] = { x, r[1], r[0] + r[2] - x, r[3] };
+    draw_plate_part(PL_LIT, rest, alpha);
+}
+
 static void draw_plate(void) {
     int base = STRING_BASE_NOTE + 12 * g_st.octave;
     int mask = g_st.chord_on ? chord_mask(g_st.root, g_st.mod) : 0;
+    /* клавиши всегда одного цвета; подсвечиваются только полосы струн:
+     * слабо - звуки аккорда, ярко - вспышка при игре */
     for (int i = 0; i < N_STRINGS; i++) {
-        float kr[2][4], br[4];
-        int nk = key_rects(i, kr);
+        float br[4];
         bar_rect(i, br);
-        int in_chord = (mask >> ((base + i) % 12)) & 1;
-        if (g_st.chord_on) {
-            for (int k = 0; k < nk; k++) draw_plate_part(in_chord ? PL_LIT : PL_DIM, kr[k], 255);
-            if (in_chord) draw_plate_part(PL_LIT, br, 60);
-        }
+        unsigned a = 0;
+        if (g_st.chord_on && ((mask >> ((base + i) % 12)) & 1)) a = 60;
         if (g_flash[i] > 0.01f) {
-            unsigned a = (unsigned)(g_flash[i] * 255.0f);
-            draw_plate_part(PL_LIT, br, a);
-            if (!g_st.chord_on) for (int k = 0; k < nk; k++) draw_plate_part(PL_LIT, kr[k], a);
+            unsigned fa = (unsigned)(g_flash[i] * 255.0f);
+            if (fa > a) a = fa;
         }
+        draw_bar_lit(br, a);
     }
 }
 
