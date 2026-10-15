@@ -81,14 +81,18 @@ static void apply_state(void) {
     send_pad();
 }
 
-/* x пальца в прошлом и текущем кадре: по доле кадра находим, где именно задета струна */
-static float g_hit_x0, g_hit_x1;
+/* палец в прошлом и текущем кадре (x и положение по струнам): по доле кадра находим,
+ * какая именно струна задета и в какой точке - от неё пойдёт подсветка */
+static float g_hit_x0, g_hit_x1, g_hit_p0, g_hit_p1;
 
 static void on_strum(int zone, float frac, void *user) {
     (void)user;
     int delay = (int)(frac * g_frame_dt * (float)SYNTH_RATE);
     audio_strum(smap.zone_note[zone], delay);
-    ui_flash_zone(zone, g_hit_x0 + (g_hit_x1 - g_hit_x0) * frac);
+    int s = (int)(g_hit_p0 + (g_hit_p1 - g_hit_p0) * frac);
+    if (s < smap.zone_lo[zone]) s = smap.zone_lo[zone];
+    if (s > smap.zone_hi[zone]) s = smap.zone_hi[zone];
+    ui_flash_string(s, g_hit_x0 + (g_hit_x1 - g_hit_x0) * frac);
 }
 
 static StrumFinger *finger_find(int id) {
@@ -203,10 +207,11 @@ int main(void) {
 
             StrumFinger *f = finger_find(id);
             if (f) {
-                g_hit_x0 = f->x; g_hit_x1 = x;
-                strum_move(f, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
-                f->x = x;
-                ui_touch_glow(x, y, 0);
+                float p = strum_pos_from_xy(x, y);
+                g_hit_x0 = f->x; g_hit_x1 = x; g_hit_p0 = f->pos; g_hit_p1 = p;
+                strum_move(f, p, &smap, on_strum, NULL);
+                ui_touch_glow(f->x, f->y, x, y);
+                f->x = x; f->y = y;
                 continue;
             }
             if (!is_new) continue;
@@ -215,10 +220,11 @@ int main(void) {
             if (kind == HIT_PLATE) {
                 StrumFinger *fr = finger_find(-1);
                 if (fr) {
-                    g_hit_x0 = g_hit_x1 = x;
-                    fr->x = x;
-                    strum_down(fr, id, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
-                    ui_touch_glow(x, y, 1);
+                    float p = strum_pos_from_xy(x, y);
+                    g_hit_x0 = g_hit_x1 = x; g_hit_p0 = g_hit_p1 = p;
+                    fr->x = x; fr->y = y;
+                    strum_down(fr, id, p, &smap, on_strum, NULL);
+                    ui_touch_glow(x, y, x, y);
                 }
             } else if (touch_down_ui(kind, idx)) {
                 Held *h = held_find(-1);

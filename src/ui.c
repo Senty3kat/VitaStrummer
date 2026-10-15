@@ -64,17 +64,16 @@ static Canvas g_cv_bg;
 static vita2d_texture *g_tex_bg = NULL;
 static Canvas g_cv_plate[PL_N];                 /* PL_NORMAL не нужен отдельно - он уже в фоне */
 static vita2d_texture *g_tex_plate[PL_N];
-static Canvas g_cv_stencil;                      /* панель с прорезями по струнам */
-static vita2d_texture *g_tex_stencil = NULL;
-/* поле подсветки в низком разрешении: GPU растягивает его с плавной интерполяцией.
+/* "жидкая" подсветка рисуется в полном разрешении в свою текстуру поверх фона.
  * Три текстуры по кругу - процессор пишет в ту, которую GPU уже не читает. */
-#define FIELD_DIV 6
-#define FIELD_W (PLATE_W / FIELD_DIV + 2)
-#define FIELD_H (PLATE_H / FIELD_DIV + 2)
-#define N_FIELD_TEX 3
-static Canvas g_cv_field;
-static vita2d_texture *g_tex_field[N_FIELD_TEX];
-static int g_field_next = 0;
+#define N_FLUID_TEX 3
+static Canvas g_cv_fluid;
+static vita2d_texture *g_tex_fluid[N_FLUID_TEX];
+static int g_fluid_next = 0;
+/* пиксели каждой струны (клавиша + нить + полоса): индекс в панели и покрытие 0..255 */
+typedef struct { uint32_t idx; uint8_t cov; } StrPix;
+static StrPix *g_spix[N_STRINGS];
+static int g_spix_n[N_STRINGS];
 static Sprite g_root_spr[N_ROOTS][2], g_mod_spr[N_MODS][ST_N], g_center_spr, g_led[2];
 static vita2d_pgf *g_pgf = NULL;
 
@@ -306,27 +305,49 @@ static int make_led(Sprite *sp, int on) {
 }
 
 
+/* Какие пиксели панели принадлежат какой струне. Каждая струна рисуется отдельно в маску;
+ * пиксель на стыке двух струн достаётся той, что покрывает его сильнее. */
+static int build_string_pixels(void) {
+    Canvas mask;
+    uint8_t *own_cov = (uint8_t *)calloc((size_t)PLATE_W * PLATE_H, 1);
+    int8_t *own = (int8_t *)malloc((size_t)PLATE_W * PLATE_H);
+    if (!own_cov || !own || !canvas_alloc(&mask, PLATE_W, PLATE_H)) return 0;
+    memset(own, -1, (size_t)PLATE_W * PLATE_H);
+    for (int i = 0; i < N_STRINGS; i++) {
+        float ya = key_center_y(i), yb = strum_string_y(i);
+        int y0 = (int)fminf(ya, yb) - 16 - PLATE_Y, y1 = (int)fmaxf(ya, yb) + 16 - PLATE_Y;
+        if (y0 < 0) y0 = 0;
+        if (y1 > PLATE_H) y1 = PLATE_H;
+        for (int y = y0; y < y1; y++) memset(mask.px + (size_t)y * PLATE_W, 0, (size_t)PLATE_W * 4);
+        paint_string(&mask, PLATE_X, PLATE_Y, i, 0.0f, RGBA8(255, 255, 255, 255));
+        for (int y = y0; y < y1; y++)
+            for (int x = 0; x < PLATE_W; x++) {
+                int k = y * PLATE_W + x;
+                unsigned c = mask.px[k] >> 24;
+                if (c > own_cov[k]) { own_cov[k] = (uint8_t)c; own[k] = (int8_t)i; }
+            }
+    }
+    for (int k = 0; k < PLATE_W * PLATE_H; k++) if (own[k] >= 0) g_spix_n[own[k]]++;
+    for (int i = 0; i < N_STRINGS; i++) {
+        g_spix[i] = (StrPix *)malloc(sizeof(StrPix) * (size_t)(g_spix_n[i] ? g_spix_n[i] : 1));
+        if (!g_spix[i]) return 0;
+        g_spix_n[i] = 0;
+    }
+    for (int k = 0; k < PLATE_W * PLATE_H; k++)
+        if (own[k] >= 0) { StrPix *p = &g_spix[own[k]][g_spix_n[own[k]]++]; p->idx = (uint32_t)k; p->cov = own_cov[k]; }
+    free(mask.px);
+    free(own);
+    free(own_cov);
+    return 1;
+}
+
 static int build_all(void) {
     if (!canvas_alloc(&g_cv_bg, SCR_W, SCR_H)) return 0;
     paint_bg(&g_cv_bg);
 
-    /* трафарет для подсветки: панель с тенями струн, но с прорезями по форме струн и клавиш.
-     * Цветное поле ряби рисуется под ним - и видно только на струнах. */
-    {
-        Canvas mask;
-        if (!canvas_alloc(&g_cv_stencil, PLATE_W, PLATE_H) || !canvas_alloc(&mask, PLATE_W, PLATE_H)) return 0;
-        for (int y = 0; y < PLATE_H; y++)
-            memcpy(g_cv_stencil.px + (size_t)y * PLATE_W, g_cv_bg.px + (size_t)(y + PLATE_Y) * SCR_W + PLATE_X, (size_t)PLATE_W * 4);
-        paint_string_shadows(&g_cv_stencil, PLATE_X, PLATE_Y);
-        for (int i = 0; i < N_STRINGS; i++) paint_string(&mask, PLATE_X, PLATE_Y, i, 0.0f, RGBA8(255, 255, 255, 255));
-        for (int k = 0; k < PLATE_W * PLATE_H; k++) {
-            unsigned cov = mask.px[k] >> 24;
-            g_cv_stencil.px[k] = (g_cv_stencil.px[k] & 0x00FFFFFFu) | ((255u - cov) << 24);
-        }
-        free(mask.px);
-    }
     paint_strings(&g_cv_bg, 0, 0, &PS_NORMAL);
-    if (!canvas_alloc(&g_cv_field, FIELD_W, FIELD_H)) return 0;
+    if (!build_string_pixels()) return 0;
+    if (!canvas_alloc(&g_cv_fluid, PLATE_W, PLATE_H)) return 0;
 
     /* "горящая" панель: копия фона в границах панели + струны оранжевым */
     for (int v = PL_LIT; v < PL_N; v++) {
@@ -360,9 +381,7 @@ static void free_textures(void) {
         for (int k = 0; k < 2; k++) { if (g_root_spr[i][k].tex) vita2d_free_texture(g_root_spr[i][k].tex); g_root_spr[i][k].tex = NULL; }
     for (int i = 0; i < N_MODS; i++)
         for (int k = 0; k < ST_N; k++) { if (g_mod_spr[i][k].tex) vita2d_free_texture(g_mod_spr[i][k].tex); g_mod_spr[i][k].tex = NULL; }
-    if (g_tex_stencil) vita2d_free_texture(g_tex_stencil);
-    g_tex_stencil = NULL;
-    for (int k = 0; k < N_FIELD_TEX; k++) { if (g_tex_field[k]) vita2d_free_texture(g_tex_field[k]); g_tex_field[k] = NULL; }
+    for (int k = 0; k < N_FLUID_TEX; k++) { if (g_tex_fluid[k]) vita2d_free_texture(g_tex_fluid[k]); g_tex_fluid[k] = NULL; }
     if (g_center_spr.tex) vita2d_free_texture(g_center_spr.tex);
     g_center_spr.tex = NULL;
     for (int k = 0; k < 2; k++) { if (g_led[k].tex) vita2d_free_texture(g_led[k].tex); g_led[k].tex = NULL; }
@@ -374,11 +393,7 @@ static void create_textures(void) {
     for (int i = 0; i < N_ROOTS; i++) for (int k = 0; k < 2; k++) g_root_spr[i][k].tex = tex_from(&g_root_spr[i][k].cv);
     for (int i = 0; i < N_MODS; i++) for (int k = 0; k < ST_N; k++) g_mod_spr[i][k].tex = tex_from(&g_mod_spr[i][k].cv);
     g_center_spr.tex = tex_from(&g_center_spr.cv);
-    g_tex_stencil = tex_from(&g_cv_stencil);
-    for (int k = 0; k < N_FIELD_TEX; k++) {
-        g_tex_field[k] = vita2d_create_empty_texture(FIELD_W, FIELD_H);
-        if (g_tex_field[k]) vita2d_texture_set_filters(g_tex_field[k], SCE_GXM_TEXTURE_FILTER_LINEAR, SCE_GXM_TEXTURE_FILTER_LINEAR);
-    }
+    for (int k = 0; k < N_FLUID_TEX; k++) g_tex_fluid[k] = vita2d_create_empty_texture(PLATE_W, PLATE_H);
     for (int k = 0; k < 2; k++) g_led[k].tex = tex_from(&g_led[k].cv);
 }
 
@@ -422,89 +437,153 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
 }
 
 /* ---------- "жидкая" подсветка ----------
- * Из точки касания расходится мягкое кольцо-рябь. Поле ряби считается в маленькой
- * текстуре (шаг FIELD_DIV пикселей), GPU растягивает её с плавной интерполяцией, а сверху
- * ложится трафарет - синяя панель с прорезями по струнам и клавишам. Поэтому цвет мягкий,
- * без ступенек, и виден только на струнах и клавишах.
- * Цвета - из постеров Retoka: тёплая гамма у касаний, холодная у звучащих струн. */
-#define FX_X0 (BULB_X1 - 30.0f)            /* струна в полосе (для слабой подсветки тоники) */
-#define FX_X1 (BAR_X1 + 1.0f)
-#define MAX_RIPPLES 24
+ * Светится только задетая струна: от точки касания по ней растекается цвет - по клавише,
+ * нити и полосе, в обе стороны. Это капли: каждая расползается, замедляется и тускнеет,
+ * а их сумма даёт одно гладкое поле - удары сливаются в единую жидкость.
+ * Палец, лежащий на струне, подпитывает каплю под собой, и она идёт за ним.
+ * Цвет зависит от густоты, как слои на постерах Retoka: густое ядро вишнёвое, дальше
+ * красный, оранжевый, янтарь, бледно-жёлтый, а на самом фронте - бирюза.
+ * Поле - по клеткам FL_CELL пикселей вдоль x (путь струны идёт слева направо), между
+ * клетками плавно; рисуется в полном разрешении точно по пикселям своей струны. */
+#define FL_X0 ((float)BK_X0 - 4.0f)
+#define FL_X1 ((float)BAR_X1 + 4.0f)
+#define FL_CELL 4.0f
+#define FL_NC ((BAR_X1 - BK_X0 + 8) / 4 + 2)       /* клеток по 4 пикселя */
+#define MAX_DROPS 160
 
-enum { PAL_WARM = 0, PAL_COOL = 1 };
-typedef struct { float x, y, age, amp, speed, width, tau; int pal; } Ripple;
-static Ripple g_rip[MAX_RIPPLES];
-static int g_nrip = 0;
-static float g_trail_t = 0.0f;             /* время с последней ряби следа */
+typedef struct { int s; float x, v, w, amt; int feed; } FDrop;
+static FDrop g_fd[MAX_DROPS];
+static int g_nfd = 0;
+static unsigned char g_str_active[N_STRINGS];     /* струна горела в прошлом кадре */
 
-/* палитры: от края волны (0) к её самой яркой части (1) */
-typedef struct { float t; int r, g, b; } PalStop;
-static const PalStop PAL[2][5] = {
-    { { 0.00f, 252, 228, 156 }, { 0.30f, 250, 170, 66 }, { 0.55f, 242, 106, 30 },
-      { 0.80f, 196, 40, 34 },   { 1.00f, 34, 26, 38 } },               /* жёлтый -> янтарь -> оранжевый -> красный -> тёмное ядро */
-    { { 0.00f, 196, 238, 222 }, { 0.30f, 112, 214, 204 }, { 0.55f, 32, 162, 182 },
-      { 0.80f, 16, 86, 126 },   { 1.00f, 14, 26, 50 } },              /* мята -> бирюза -> морская волна -> глубокий синий */
-};
-
-static uint32_t pal_color(int pal, float b, unsigned alpha) {
-    const PalStop *p = PAL[pal];
-    int k = 0;
-    while (k < 3 && b > p[k + 1].t) k++;
-    float t = (b - p[k].t) / (p[k + 1].t - p[k].t);
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    return RGBA8((int)(p[k].r + (p[k + 1].r - p[k].r) * t), (int)(p[k].g + (p[k + 1].g - p[k].g) * t),
-                 (int)(p[k].b + (p[k + 1].b - p[k].b) * t), alpha);
-}
-
-static void ripple_add(float x, float y, float amp, float speed, float width, float tau, int pal) {
-    Ripple *r;
-    if (g_nrip < MAX_RIPPLES) r = &g_rip[g_nrip++];
-    else {                                 /* места нет - заменяем самую слабую */
-        r = &g_rip[0];
-        for (int i = 1; i < MAX_RIPPLES; i++)
-            if (g_rip[i].amp * expf(-g_rip[i].age / g_rip[i].tau) < r->amp * expf(-r->age / r->tau)) r = &g_rip[i];
+/* палитра по густоте 0..1 и прозрачность (таблицы на 256 значений) */
+static uint32_t g_pal_lut[256];
+static void fluid_init_palette(void) {
+    static const float T[7] = { 0.00f, 0.10f, 0.28f, 0.48f, 0.66f, 0.84f, 1.00f };
+    static const int C[7][3] = { { 120, 212, 206 },   /* бирюзовый фронт */
+                                 { 250, 232, 168 },   /* бледно-жёлтый */
+                                 { 250, 178, 72 },    /* янтарь */
+                                 { 243, 112, 34 },    /* оранжевый */
+                                 { 214, 54, 38 },     /* красный */
+                                 { 168, 32, 52 },     /* вишнёвый */
+                                 { 110, 26, 58 } };   /* глубокое ядро */
+    for (int i = 0; i < 256; i++) {
+        float v = (float)i / 255.0f;
+        int k = 0;
+        while (k < 5 && v > T[k + 1]) k++;
+        float t = (v - T[k]) / (T[k + 1] - T[k]);
+        int r = (int)(C[k][0] + (C[k + 1][0] - C[k][0]) * t);
+        int g = (int)(C[k][1] + (C[k + 1][1] - C[k][1]) * t);
+        int b = (int)(C[k][2] + (C[k + 1][2] - C[k][2]) * t);
+        float a = v / 0.16f;                         /* фронт мягко проявляется */
+        if (a > 1.0f) a = 1.0f;
+        a = a * a * (3.0f - 2.0f * a);
+        g_pal_lut[i] = RGBA8(r, g, b, (int)(a * 238.0f));
     }
-    r->x = x; r->y = y; r->age = 0.0f; r->amp = amp; r->speed = speed; r->width = width; r->tau = tau; r->pal = pal;
 }
 
-/* яркость ряби в точке (самая яркая из перекрывающихся) и её палитра */
-static float ripple_at(float x, float y, int *pal) {
-    float b = 0.0f;
-    *pal = PAL_WARM;
-    for (int i = 0; i < g_nrip; i++) {
-        const Ripple *r = &g_rip[i];
-        float fade = r->amp * expf(-r->age / r->tau);
-        float R = r->speed * r->age, w = r->width + 0.25f * R;
-        float dx = x - r->x, dy = y - r->y, d2 = dx * dx + dy * dy;
-        float reach = R + 3.0f * w;
-        if (d2 > reach * reach && d2 > 9.0f * r->width * r->width) continue;   /* далеко - не считаем */
-        float d = sqrtf(d2);
-        float ring = (d - R) / w;
-        float core = d / (r->width * 1.4f);
-        float v = fade * (expf(-ring * ring) + 0.6f * expf(-r->age / (r->tau * 0.4f)) * expf(-core * core));
-        if (v > b) { b = v; *pal = r->pal; }
-    }
-    return b > 1.0f ? 1.0f : b;
+static FDrop *fdrop_new(void) {
+    if (g_nfd < MAX_DROPS) return &g_fd[g_nfd++];
+    FDrop *w = &g_fd[0];                              /* места нет - заменяем самую слабую */
+    for (int i = 1; i < MAX_DROPS; i++) if (g_fd[i].amt < w->amt) w = &g_fd[i];
+    return w;
 }
 
-/* заполнить поле: точка (u, v) - центр участка FIELD_DIV x FIELD_DIV на экране */
-static void field_render(void) {
-    uint32_t *px = g_cv_field.px;
-    for (int v = 0; v < FIELD_H; v++) {
-        float y = PLATE_Y + ((float)v - 0.5f) * FIELD_DIV;
-        for (int u = 0; u < FIELD_W; u++) {
-            float x = PLATE_X + ((float)u - 0.5f) * FIELD_DIV;
-            int pal;
-            float b = ripple_at(x, y, &pal);
-            /* прозрачность плавно нарастает; цвет есть и у прозрачных точек,
-             * чтобы при растяжении по краям не было тёмной каймы */
-            float a = b * 2.2f;
-            if (a > 1.0f) a = 1.0f;
-            a = a * a * (3.0f - 2.0f * a);
-            px[v * FIELD_W + u] = pal_color(pal, b, (unsigned)(a * 235.0f));
+static float clampx(float x) { return x < FL_X0 + 2 ? FL_X0 + 2 : (x > FL_X1 - 2 ? FL_X1 - 2 : x); }
+
+/* удар по струне: капля на месте и две, растекающиеся в стороны */
+static void fluid_hit(int s, float x, float amt) {
+    x = clampx(x);
+    FDrop *d;
+    d = fdrop_new(); d->s = s; d->x = x; d->v = 0.0f;    d->w = 12.0f; d->amt = amt;         d->feed = 0;
+    d = fdrop_new(); d->s = s; d->x = x; d->v = -430.0f; d->w = 9.0f;  d->amt = amt * 0.75f; d->feed = 0;
+    d = fdrop_new(); d->s = s; d->x = x; d->v = 430.0f;  d->w = 9.0f;  d->amt = amt * 0.75f; d->feed = 0;
+}
+
+/* палец на струне: капля под ним подпитывается и идёт за пальцем */
+static void fluid_feed(int s, float x, float amt) {
+    x = clampx(x);
+    for (int i = 0; i < g_nfd; i++) {
+        FDrop *d = &g_fd[i];
+        if (d->s == s && d->feed) {
+            d->x += (x - d->x) * 0.6f;
+            if (d->amt < amt) d->amt = amt;
+            d->feed = 2;                               /* обновлена в этом кадре */
+            return;
         }
     }
+    FDrop *d = fdrop_new();
+    d->s = s; d->x = x; d->v = 0.0f; d->w = 14.0f; d->amt = amt; d->feed = 2;
+}
+
+static void fx_update(float dt) {
+    int n = 0;
+    float vk = expf(-dt / 0.22f), ak = expf(-dt / 0.40f);
+    for (int i = 0; i < g_nfd; i++) {
+        FDrop *d = &g_fd[i];
+        d->x += d->v * dt;
+        if (d->x < FL_X0 || d->x > FL_X1) { d->x = clampx(d->x); d->v = 0.0f; }
+        d->v *= vk;
+        d->w += (58.0f - d->w) * (1.0f - expf(-dt / 0.5f));   /* расплывается */
+        if (d->feed == 2) d->feed = 1;                          /* подпитка держит, пока палец здесь */
+        else { d->feed = 0; d->amt *= ak; }
+        if (d->amt > 0.015f) g_fd[n++] = *d;
+    }
+    g_nfd = n;
+}
+
+/* поле одной струны по клеткам */
+static void fluid_cells(int s, float *cell) {
+    for (int c = 0; c < FL_NC; c++) cell[c] = 0.0f;
+    for (int i = 0; i < g_nfd; i++) {
+        const FDrop *d = &g_fd[i];
+        if (d->s != s) continue;
+        float reach = 2.6f * d->w;
+        int c0 = (int)((d->x - reach - FL_X0) / FL_CELL), c1 = (int)((d->x + reach - FL_X0) / FL_CELL) + 1;
+        if (c0 < 0) c0 = 0;
+        if (c1 > FL_NC) c1 = FL_NC;
+        float inv = 1.0f / d->w;
+        for (int c = c0; c < c1; c++) {
+            float t = (FL_X0 + (float)c * FL_CELL - d->x) * inv;
+            cell[c] += d->amt * expf(-t * t);
+        }
+    }
+    /* мягкое насыщение: слияние капель не "выжигает" цвет */
+    for (int c = 0; c < FL_NC; c++) cell[c] = 1.0f - expf(-1.25f * cell[c]);
+}
+
+/* перерисовать подсветку; 0 - ничего не горит */
+static int fluid_render(void) {
+    static float cell[FL_NC + 1];
+    int any = 0;
+    for (int s = 0; s < N_STRINGS; s++) {
+        int has = 0;
+        for (int i = 0; i < g_nfd && !has; i++) has = g_fd[i].s == s;
+        if (!has) {
+            if (g_str_active[s]) {                     /* погасла - стираем её пиксели */
+                for (int k = 0; k < g_spix_n[s]; k++) g_cv_fluid.px[g_spix[s][k].idx] = 0;
+                g_str_active[s] = 0;
+            }
+            continue;
+        }
+        any = 1;
+        g_str_active[s] = 1;
+        fluid_cells(s, cell);
+        cell[FL_NC] = cell[FL_NC - 1];
+        for (int k = 0; k < g_spix_n[s]; k++) {
+            const StrPix *p = &g_spix[s][k];
+            float fx = ((float)(p->idx % PLATE_W) + PLATE_X + 0.5f - FL_X0) / FL_CELL;
+            int c = (int)fx;
+            if (c < 0) c = 0;
+            if (c >= FL_NC) c = FL_NC - 1;
+            float t = fx - (float)c;
+            float v = cell[c] + (cell[c + 1] - cell[c]) * t;
+            uint32_t col = g_pal_lut[(int)(v * 255.0f)];
+            unsigned a = ((col >> 24) * p->cov) / 255u;
+            g_cv_fluid.px[p->idx] = (col & 0x00FFFFFFu) | (a << 24);
+        }
+    }
+    return any;
 }
 
 static void plate_span(const float br[4], float a, float b, unsigned alpha) {
@@ -520,26 +599,13 @@ static void draw_plate(void) {
             if (((g_map.note[i] % 12 + 12) % 12) != g_st.root) continue;
             float br[4];
             bar_rect(i, br);
-            plate_span(br, FX_X0, FX_X1, 55);
+            plate_span(br, BULB_X1 - 30.0f, BAR_X1 + 1.0f, 55);
         }
-    if (g_nrip == 0 || !g_tex_field[0] || !g_tex_stencil) return;
-    /* поле ряби, растянутое GPU, и трафарет поверх */
-    vita2d_texture *t = g_tex_field[g_field_next];
-    g_field_next = (g_field_next + 1) % N_FIELD_TEX;
-    field_render();
-    upload(t, &g_cv_field);
-    vita2d_draw_texture_scale(t, PLATE_X - FIELD_DIV, PLATE_Y - FIELD_DIV, FIELD_DIV, FIELD_DIV);
-    vita2d_draw_texture(g_tex_stencil, PLATE_X, PLATE_Y);
-}
-
-static void fx_update(float dt) {
-    int n = 0;
-    for (int i = 0; i < g_nrip; i++) {
-        g_rip[i].age += dt;
-        if (g_rip[i].amp * expf(-g_rip[i].age / g_rip[i].tau) > 0.02f) g_rip[n++] = g_rip[i];
-    }
-    g_nrip = n;
-    g_trail_t += dt;
+    if (!fluid_render() || !g_tex_fluid[0]) return;
+    vita2d_texture *t = g_tex_fluid[g_fluid_next];
+    g_fluid_next = (g_fluid_next + 1) % N_FLUID_TEX;
+    upload(t, &g_cv_fluid);
+    vita2d_draw_texture(t, PLATE_X, PLATE_Y);
 }
 
 static void draw_wheel(void) {
@@ -614,7 +680,9 @@ static void draw_header(const UiDebug *dbg) {
 
 /* ---------- внешний интерфейс ---------- */
 int ui_init(void) {
-    g_nrip = 0;
+    g_nfd = 0;
+    memset(g_str_active, 0, sizeof(g_str_active));
+    fluid_init_palette();
     memset(&g_st, 0, sizeof(g_st));
     stringmap_build(&g_map, 0, 0, 0, STRING_BASE_NOTE);
     if (!build_all()) return 0;
@@ -642,22 +710,25 @@ void ui_set_held(const int *kinds, const int *indices, int n) {
     g_held_n = n;
 }
 
-void ui_flash_zone(int zone, float x) {
-    if (zone < 0 || zone >= g_map.nzones) return;
-    float y = (strum_string_y(g_map.zone_lo[zone]) + strum_string_y(g_map.zone_hi[zone])) * 0.5f;
-    ripple_add(x, y, 0.55f, 230.0f, 8.0f, 0.30f, PAL_COOL);
+void ui_flash_string(int s, float x) {
+    if (s < 0 || s >= N_STRINGS) return;
+    fluid_hit(s, x, 1.0f);
 }
 
-void ui_touch_glow(float x, float y, int down) {
-    if (down) {                              /* касание: сильный всплеск */
-        ripple_add(x, y, 1.0f, 260.0f, 13.0f, 0.45f, PAL_WARM);
-        g_trail_t = 0.0f;
-        return;
+void ui_touch_glow(float x0, float y0, float x1, float y1) {
+    /* подпитать все струны, через которые палец прошёл за кадр */
+    float p0 = strum_pos_from_xy(x0, y0), p1 = strum_pos_from_xy(x1, y1);
+    int s0 = (int)p0, s1 = (int)p1;
+    int step = s1 >= s0 ? 1 : -1;
+    for (int s = s0 + step; s != s1 + step && s0 != s1; s += step) {
+        if (s == s1) break;
+        float t = (((float)s + 0.5f) - p0) / (p1 - p0);    /* где палец пересёк струну */
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        FDrop *d = fdrop_new();                             /* пройденная по пути: спокойная капля */
+        d->s = s; d->x = clampx(x0 + (x1 - x0) * t); d->v = 0.0f; d->w = 10.0f; d->amt = 0.4f; d->feed = 0;
     }
-    if (g_trail_t >= 0.05f) {                /* след за пальцем: небольшая рябь каждые 50 мс */
-        ripple_add(x, y, 0.4f, 150.0f, 9.0f, 0.24f, PAL_WARM);
-        g_trail_t = 0.0f;
-    }
+    fluid_feed(s1, x1, 0.7f);                               /* струна под пальцем */
 }
 
 int ui_hit(float x, float y, int *index) {

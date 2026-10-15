@@ -1,4 +1,4 @@
-/* Превью экрана на компьютере: несколько состояний и анимация жеста в out/ (ppm + подписи) */
+/* Превью экрана на компьютере: состояния и анимации жестов в out/ (ppm + подписи) */
 #include "../src/ui.h"
 #include "../src/theory.h"
 #include "../src/strum.h"
@@ -8,13 +8,22 @@
 extern const char *host_frame_name;
 
 static StringMap g_m;
-static float g_x0, g_x1;
-static void on_hit(int zone, float frac, void *u) { (void)u; ui_flash_zone(zone, g_x0 + (g_x1 - g_x0) * frac); }
+static float g_x0, g_x1, g_p0, g_p1;
+
+/* как в main.c: какая струна задета и где */
+static void on_hit(int zone, float frac, void *u) {
+    (void)u;
+    int s = (int)(g_p0 + (g_p1 - g_p0) * frac);
+    if (s < g_m.zone_lo[zone]) s = g_m.zone_lo[zone];
+    if (s > g_m.zone_hi[zone]) s = g_m.zone_hi[zone];
+    ui_flash_string(s, g_x0 + (g_x1 - g_x0) * frac);
+}
 
 static void set_state(int mode, int chord_on, int root, int mod, int octave) {
     AppState s = { mode, chord_on, root, mod, octave };
     stringmap_build(&g_m, chord_on, root, mod, STRING_BASE_NOTE + 12 * octave);
     ui_set_state(&s, &g_m);
+    ui_set_held(NULL, NULL, 0);
 }
 
 static void shot(const char *name, int held_kind, int held_idx) {
@@ -22,27 +31,53 @@ static void shot(const char *name, int held_kind, int held_idx) {
     UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
     host_frame_name = name;
     ui_draw(0.001f, &d);
+    ui_set_held(NULL, NULL, 0);
     printf("%s: zones=%d\n", name, g_m.nzones);
 }
 
-/* жест: касание внизу справа и быстрое проведение вверх-влево, 60 кадров в секунду */
-static void gesture(const char *prefix, int frames_total) {
+/* палец по траектории: кадры 0..touch_frames касаются, дальше палец отпущен */
+typedef void (*Path)(int fr, float *x, float *y);
+
+static void run(const char *prefix, Path path, int touch_frames, int frames_total) {
     static char name[64];
     UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
     StrumFinger f;
-    const int swipe = 14;
     for (int fr = 0; fr < frames_total; fr++) {
-        float t = (float)fr / (float)swipe;
-        if (fr <= swipe) {
-            float x = 860.0f - 90.0f * t, y = 470.0f - 360.0f * t * t * (3.0f - 2.0f * t);
-            if (fr == 0) { g_x0 = g_x1 = x; f.x = x; strum_down(&f, 1, strum_pos_from_xy(x, y), &g_m, on_hit, NULL); ui_touch_glow(x, y, 1); }
-            else { g_x0 = f.x; g_x1 = x; strum_move(&f, strum_pos_from_xy(x, y), &g_m, on_hit, NULL); f.x = x; ui_touch_glow(x, y, 0); }
+        if (fr < touch_frames) {
+            float x, y;
+            path(fr, &x, &y);
+            float p = strum_pos_from_xy(x, y);
+            if (fr == 0) {
+                g_x0 = g_x1 = x; g_p0 = g_p1 = p;
+                f.x = x; f.y = y;
+                strum_down(&f, 1, p, &g_m, on_hit, NULL);
+                ui_touch_glow(x, y, x, y);
+            } else {
+                g_x0 = f.x; g_x1 = x; g_p0 = f.pos; g_p1 = p;
+                strum_move(&f, p, &g_m, on_hit, NULL);
+                ui_touch_glow(f.x, f.y, x, y);
+                f.x = x; f.y = y;
+            }
         }
         snprintf(name, sizeof(name), "%s_%02d", prefix, fr);
         host_frame_name = name;
         ui_draw(1.0f / 60.0f, &d);
     }
 }
+
+/* быстрое проведение вверх-влево по струнам */
+static void path_swipe(int fr, float *x, float *y) {
+    float t = (float)fr / 14.0f;
+    if (t > 1.0f) t = 1.0f;
+    *x = 860.0f - 90.0f * t;
+    *y = 470.0f - 360.0f * t * t * (3.0f - 2.0f * t);
+}
+/* касание полосы и сразу отпустить */
+static void path_tap(int fr, float *x, float *y) { (void)fr; *x = 820.0f; *y = 300.0f; }
+/* касание клавиши */
+static void path_key(int fr, float *x, float *y) { (void)fr; *x = 596.0f; *y = 330.0f; }
+/* палец лежит на струне и медленно ведёт вдоль неё */
+static void path_hold(int fr, float *x, float *y) { *x = 700.0f + 6.0f * (float)fr; *y = 250.0f; }
 
 int main(void) {
     clock_t t0 = clock();
@@ -54,37 +89,14 @@ int main(void) {
     shot("screen_C", 0, 0);
     set_state(MODE_PAD, 1, 9, 6, 1);
     shot("screen_Am7_pad", HIT_MOD, 6);
+
     set_state(MODE_STRUM, 1, 9, 6, 0);
-    gesture("anim", 48);
-    /* одиночное касание без движения: видно расходящееся кольцо */
-    {
-        UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
-        static char name[32];
-        set_state(MODE_STRUM, 0, 0, 0, 0);
-        StrumFinger f;
-        g_x0 = g_x1 = 820.0f; f.x = 820.0f;
-        strum_down(&f, 2, strum_pos_from_xy(820, 300), &g_m, on_hit, NULL);
-        ui_touch_glow(820, 300, 1);
-        for (int fr = 0; fr < 30; fr++) {
-            snprintf(name, sizeof(name), "tap_%02d", fr);
-            host_frame_name = name;
-            ui_draw(1.0f / 60.0f, &d);
-        }
-    }
-    /* касание по клавишам слева - волна идёт и по клавишам */
-    {
-        UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
-        static char name[32];
-        set_state(MODE_STRUM, 1, 7, 4, 0);
-        StrumFinger f;
-        g_x0 = g_x1 = 600.0f; f.x = 600.0f;
-        strum_down(&f, 3, strum_pos_from_xy(600, 330), &g_m, on_hit, NULL);
-        ui_touch_glow(600, 330, 1);
-        for (int fr = 0; fr < 14; fr++) {
-            snprintf(name, sizeof(name), "keys_%02d", fr);
-            host_frame_name = name;
-            ui_draw(1.0f / 60.0f, &d);
-        }
-    }
+    run("anim", path_swipe, 15, 50);
+    set_state(MODE_STRUM, 0, 0, 0, 0);
+    run("tap", path_tap, 2, 40);
+    set_state(MODE_STRUM, 1, 7, 4, 0);
+    run("keys", path_key, 2, 30);
+    set_state(MODE_STRUM, 0, 0, 0, 0);
+    run("hold", path_hold, 30, 50);
     return 0;
 }
