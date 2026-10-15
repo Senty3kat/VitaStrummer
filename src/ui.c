@@ -74,7 +74,7 @@ static int g_fluid_next = 0;
 typedef struct { uint32_t idx; uint8_t cov; } StrPix;
 static StrPix *g_spix[N_STRINGS];
 static int g_spix_n[N_STRINGS];
-static Sprite g_root_spr[N_ROOTS][2], g_mod_spr[N_MODS][ST_N], g_center_spr, g_led[2];
+static Sprite g_root_spr[N_ROOTS][2], g_mod_spr[N_MODS][ST_N], g_qual_spr[2][ST_N], g_led[2];
 static vita2d_pgf *g_pgf = NULL;
 
 static AppState g_st;
@@ -273,17 +273,24 @@ static int make_sector_sprite(Sprite *sp, SdfSector s, const Skin *skin) {
     return 1;
 }
 
-static int make_center_sprite(Sprite *sp) {
-    Box bb = { WHEEL_CX - CENTER_R, WHEEL_CY - CENTER_R, WHEEL_CX + CENTER_R, WHEEL_CY + CENTER_R };
+/* половина круга в центре колеса: сверху мажор, снизу минор; ровный зазор и скруглённые углы */
+typedef struct { float cx, cy, r, gap, round; int bottom; } SdfHalf;
+static float sdf_half(float x, float y, const void *ctx) {
+    const SdfHalf *h = (const SdfHalf *)ctx;
+    float dx = x - h->cx, dy = y - h->cy;
+    float a = sqrtf(dx * dx + dy * dy) - h->r;
+    float b = (h->bottom ? -dy : dy) + h->gap * 0.5f;
+    float ax = a + h->round, ay = b + h->round;
+    float ox = fmaxf(ax, 0.0f), oy = fmaxf(ay, 0.0f);
+    return sqrtf(ox * ox + oy * oy) + fminf(fmaxf(ax, ay), 0.0f) - h->round;
+}
+
+static int make_qual_sprite(Sprite *sp, int bottom, const Skin *skin) {
+    Box bb = { WHEEL_CX - CENTER_R, bottom ? WHEEL_CY : WHEEL_CY - CENTER_R,
+               WHEEL_CX + CENTER_R, bottom ? WHEEL_CY + CENTER_R : WHEEL_CY };
     if (!sprite_alloc(sp, bb, 10)) return 0;
-    SdfCircle cc = { WHEEL_CX - sp->x, WHEEL_CY - sp->y, CENTER_R };
-    Skin sk = { RGBA8(30, 48, 66, 255), RGBA8(92, 120, 144, 255), RGBA8(58, 84, 106, 255) };
-    Box lb = box_shift(bb, -sp->x, -sp->y);
-    bevel(&sp->cv, sdf_circle, &cc, lb, &sk, 3.5f);
-    SdfRing rim = { cc.cx, cc.cy, CENTER_R - 10.0f, CENTER_R - 8.5f };
-    cv_sdf_fill(&sp->cv, sdf_ring, &rim, lb, 0, 0, 0, 0, RGBA8(36, 56, 76, 160), RGBA8(36, 56, 76, 160));
-    cv_star(&sp->cv, cc.cx, cc.cy + 1.0f, 23, 6.0f, DARK_A(70));
-    cv_star(&sp->cv, cc.cx, cc.cy, 23, 6.0f, RGBA8(240, 230, 210, 255));
+    SdfHalf h = { WHEEL_CX - sp->x, WHEEL_CY - sp->y, CENTER_R, SEG_GAP, 14.0f, bottom };
+    bevel(&sp->cv, sdf_half, &h, box_shift(bb, -sp->x, -sp->y), skin, 3.5f);
     return 1;
 }
 
@@ -368,7 +375,11 @@ static int build_all(void) {
         if (!make_sector_sprite(&g_mod_spr[i][ST_SEL], s, &SK_OR)) return 0;
         if (!make_sector_sprite(&g_mod_spr[i][ST_ARMED], s, &SK_PEACH)) return 0;
     }
-    if (!make_center_sprite(&g_center_spr)) return 0;
+    for (int q = 0; q < 2; q++) {
+        if (!make_qual_sprite(&g_qual_spr[q][ST_NORMAL], q, &SK_CREAM)) return 0;
+        if (!make_qual_sprite(&g_qual_spr[q][ST_SEL], q, &SK_OR)) return 0;
+        if (!make_qual_sprite(&g_qual_spr[q][ST_ARMED], q, &SK_PEACH)) return 0;
+    }
     if (!make_led(&g_led[0], 0) || !make_led(&g_led[1], 1)) return 0;
     return 1;
 }
@@ -382,8 +393,8 @@ static void free_textures(void) {
     for (int i = 0; i < N_MODS; i++)
         for (int k = 0; k < ST_N; k++) { if (g_mod_spr[i][k].tex) vita2d_free_texture(g_mod_spr[i][k].tex); g_mod_spr[i][k].tex = NULL; }
     for (int k = 0; k < N_FLUID_TEX; k++) { if (g_tex_fluid[k]) vita2d_free_texture(g_tex_fluid[k]); g_tex_fluid[k] = NULL; }
-    if (g_center_spr.tex) vita2d_free_texture(g_center_spr.tex);
-    g_center_spr.tex = NULL;
+    for (int q = 0; q < 2; q++)
+        for (int k = 0; k < ST_N; k++) { if (g_qual_spr[q][k].tex) vita2d_free_texture(g_qual_spr[q][k].tex); g_qual_spr[q][k].tex = NULL; }
     for (int k = 0; k < 2; k++) { if (g_led[k].tex) vita2d_free_texture(g_led[k].tex); g_led[k].tex = NULL; }
 }
 
@@ -392,7 +403,7 @@ static void create_textures(void) {
     for (int v = PL_LIT; v < PL_N; v++) g_tex_plate[v] = tex_from(&g_cv_plate[v]);
     for (int i = 0; i < N_ROOTS; i++) for (int k = 0; k < 2; k++) g_root_spr[i][k].tex = tex_from(&g_root_spr[i][k].cv);
     for (int i = 0; i < N_MODS; i++) for (int k = 0; k < ST_N; k++) g_mod_spr[i][k].tex = tex_from(&g_mod_spr[i][k].cv);
-    g_center_spr.tex = tex_from(&g_center_spr.cv);
+    for (int q = 0; q < 2; q++) for (int k = 0; k < ST_N; k++) g_qual_spr[q][k].tex = tex_from(&g_qual_spr[q][k].cv);
     for (int k = 0; k < N_FLUID_TEX; k++) g_tex_fluid[k] = vita2d_create_empty_texture(PLATE_W, PLATE_H);
     for (int k = 0; k < 2; k++) g_led[k].tex = tex_from(&g_led[k].cv);
 }
@@ -441,15 +452,21 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
  * нити и полосе, в обе стороны. Это капли: каждая расползается, замедляется и тускнеет,
  * а их сумма даёт одно гладкое поле - удары сливаются в единую жидкость.
  * Палец, лежащий на струне, подпитывает каплю под собой, и она идёт за ним.
- * Цвет зависит от густоты, как слои на постерах Retoka: густое ядро вишнёвое, дальше
- * красный, оранжевый, янтарь, бледно-жёлтый, а на самом фронте - бирюза.
+ * Цвет зависит от густоты, как слои на постерах Retoka: густое ядро вишнёво-синее, дальше
+ * красный, оранжевый, янтарь, бледно-жёлтый, на самом фронте - голубой, в самом густом месте - синий.
  * Поле - по клеткам FL_CELL пикселей вдоль x (путь струны идёт слева направо), между
  * клетками плавно; рисуется в полном разрешении точно по пикселям своей струны. */
 #define FL_X0 ((float)BK_X0 - 4.0f)
 #define FL_X1 ((float)BAR_X1 + 4.0f)
 #define FL_CELL 4.0f
 #define FL_NC ((BAR_X1 - BK_X0 + 8) / 4 + 2)       /* клеток по 4 пикселя */
-#define MAX_DROPS 160
+#define MAX_DROPS 200
+/* разлёт: начальная скорость капель и её затухание - от полосы цвет доходит до нитей
+ * и края клавиш (около 200 px), от клавиши - до полосы */
+#define FL_SPEED 640.0f
+#define FL_SPEED_TAU 0.32f
+#define FL_WIDTH 74.0f
+#define FL_FADE_TAU 0.42f
 
 typedef struct { int s; float x, v, w, amt; int feed; } FDrop;
 static FDrop g_fd[MAX_DROPS];
@@ -457,25 +474,31 @@ static int g_nfd = 0;
 static unsigned char g_str_active[N_STRINGS];     /* струна горела в прошлом кадре */
 
 /* палитра по густоте 0..1 и прозрачность (таблицы на 256 значений) */
+#define NPAL 9
 static uint32_t g_pal_lut[256];
 static void fluid_init_palette(void) {
-    static const float T[7] = { 0.00f, 0.10f, 0.28f, 0.48f, 0.66f, 0.84f, 1.00f };
-    static const int C[7][3] = { { 120, 212, 206 },   /* бирюзовый фронт */
-                                 { 250, 232, 168 },   /* бледно-жёлтый */
-                                 { 250, 178, 72 },    /* янтарь */
-                                 { 243, 112, 34 },    /* оранжевый */
-                                 { 214, 54, 38 },     /* красный */
-                                 { 168, 32, 52 },     /* вишнёвый */
-                                 { 110, 26, 58 } };   /* глубокое ядро */
+    /* от фронта к ядру: голубой -> бледно-жёлтый -> янтарь -> оранжевый -> красный ->
+     * вишнёвый -> глубокий синий (как сменяются слои на постерах) */
+    static const float T[NPAL] = { 0.00f, 0.16f, 0.30f, 0.44f, 0.57f, 0.70f, 0.82f, 0.92f, 1.00f };
+    static const int C[NPAL][3] = { { 96, 182, 220 },    /* голубая кромка */
+                                    { 196, 222, 206 },   /* переход к жёлтому */
+                                    { 250, 226, 160 },   /* бледно-жёлтый */
+                                    { 250, 176, 70 },    /* янтарь */
+                                    { 243, 112, 34 },    /* оранжевый */
+                                    { 214, 54, 40 },     /* красный */
+                                    { 150, 34, 62 },     /* вишнёвый */
+                                    { 60, 48, 112 },     /* индиго */
+                                    { 26, 62, 128 } };   /* глубокий синий */
     for (int i = 0; i < 256; i++) {
         float v = (float)i / 255.0f;
         int k = 0;
-        while (k < 5 && v > T[k + 1]) k++;
+        while (k < NPAL - 2 && v > T[k + 1]) k++;
         float t = (v - T[k]) / (T[k + 1] - T[k]);
         int r = (int)(C[k][0] + (C[k + 1][0] - C[k][0]) * t);
         int g = (int)(C[k][1] + (C[k + 1][1] - C[k][1]) * t);
         int b = (int)(C[k][2] + (C[k + 1][2] - C[k][2]) * t);
-        float a = v / 0.16f;                         /* фронт мягко проявляется */
+        float a = (v - 0.03f) / 0.30f;               /* слабый цвет почти прозрачен: кромка мягкая, */
+        if (a < 0.0f) a = 0.0f;                      /* а при угасании не остаётся пелены */
         if (a > 1.0f) a = 1.0f;
         a = a * a * (3.0f - 2.0f * a);
         g_pal_lut[i] = RGBA8(r, g, b, (int)(a * 238.0f));
@@ -496,8 +519,8 @@ static void fluid_hit(int s, float x, float amt) {
     x = clampx(x);
     FDrop *d;
     d = fdrop_new(); d->s = s; d->x = x; d->v = 0.0f;    d->w = 12.0f; d->amt = amt;         d->feed = 0;
-    d = fdrop_new(); d->s = s; d->x = x; d->v = -430.0f; d->w = 9.0f;  d->amt = amt * 0.75f; d->feed = 0;
-    d = fdrop_new(); d->s = s; d->x = x; d->v = 430.0f;  d->w = 9.0f;  d->amt = amt * 0.75f; d->feed = 0;
+    d = fdrop_new(); d->s = s; d->x = x; d->v = -FL_SPEED; d->w = 10.0f; d->amt = amt * 0.8f; d->feed = 0;
+    d = fdrop_new(); d->s = s; d->x = x; d->v = FL_SPEED;  d->w = 10.0f; d->amt = amt * 0.8f; d->feed = 0;
 }
 
 /* палец на струне: капля под ним подпитывается и идёт за пальцем */
@@ -518,13 +541,13 @@ static void fluid_feed(int s, float x, float amt) {
 
 static void fx_update(float dt) {
     int n = 0;
-    float vk = expf(-dt / 0.22f), ak = expf(-dt / 0.40f);
+    float vk = expf(-dt / FL_SPEED_TAU), ak = expf(-dt / FL_FADE_TAU);
     for (int i = 0; i < g_nfd; i++) {
         FDrop *d = &g_fd[i];
         d->x += d->v * dt;
         if (d->x < FL_X0 || d->x > FL_X1) { d->x = clampx(d->x); d->v = 0.0f; }
         d->v *= vk;
-        d->w += (58.0f - d->w) * (1.0f - expf(-dt / 0.5f));   /* расплывается */
+        d->w += (FL_WIDTH - d->w) * (1.0f - expf(-dt / 0.5f));   /* расплывается */
         if (d->feed == 2) d->feed = 1;                          /* подпитка держит, пока палец здесь */
         else { d->feed = 0; d->amt *= ak; }
         if (d->amt > 0.015f) g_fd[n++] = *d;
@@ -619,7 +642,11 @@ static void draw_wheel(void) {
         if (g_st.mod == i) st = g_st.chord_on ? ST_SEL : ST_ARMED;
         draw_sprite(&g_mod_spr[i][st], 0, 0, is_held(HIT_MOD, i));
     }
-    draw_sprite(&g_center_spr, 0, 0, is_held(HIT_CENTER, 0));
+    for (int q = 0; q < 2; q++) {
+        int st = ST_NORMAL;
+        if (g_st.minor == q) st = g_st.chord_on ? ST_SEL : ST_ARMED;
+        draw_sprite(&g_qual_spr[q][st], 0, 0, is_held(HIT_QUAL, q));
+    }
 
     for (int i = 0; i < N_ROOTS; i++) {
         float x, y;
@@ -631,7 +658,11 @@ static void draw_wheel(void) {
         float x, y;
         seg_center(i, N_MODS, (MOD_R0 + MOD_R1) / 2.0f + 2.0f, &x, &y);
         float d = is_held(HIT_MOD, i) ? 1.5f : 0.0f;
-        text_c(x, y + d, C_NAVY, 0.92f, mod_label(i), 1);
+        text_c(x, y + d, C_NAVY, 0.92f, type_label(chord_type(g_st.minor, i)), 1);
+    }
+    for (int q = 0; q < 2; q++) {
+        float d = is_held(HIT_QUAL, q) ? 1.5f : 0.0f;
+        text_c(WHEEL_CX, WHEEL_CY + (q ? 1.0f : -1.0f) * CENTER_R * 0.45f + d, C_NAVY, 1.15f, q ? "min" : "maj", 1);
     }
 }
 
@@ -661,9 +692,9 @@ static void draw_header(const UiDebug *dbg) {
     draw_sprite(&g_led[g_st.chord_on], LCD_X + 22, LCD_Y + LCD_H / 2.0f, 0);
     text_spaced(LCD_X + 42, LCD_Y + 13, C_LCD_DIM, 0.48f, 1.5f, "CHORD", 0);
     if (g_st.chord_on) {
-        chord_name(buf, sizeof(buf), g_st.root, g_st.mod);
+        chord_name(buf, sizeof(buf), g_st.root, chord_type(g_st.minor, g_st.mod));
         text_at(LCD_X + 42, LCD_Y + 37, C_LCD_TEXT, 1.3f, buf, 1);
-        const char *ln = mod_long(g_st.mod);
+        const char *ln = type_long(chord_type(g_st.minor, g_st.mod));
         text_at(LCD_X + LCD_W - 18 - text_w(0.62f, ln), LCD_Y + 35, C_LCD_DIM, 0.62f, ln, 0);
     } else {
         text_at(LCD_X + 42, LCD_Y + 35, C_LCD_DIM, 0.9f, "chromatic", 0);
@@ -710,25 +741,22 @@ void ui_set_held(const int *kinds, const int *indices, int n) {
     g_held_n = n;
 }
 
-void ui_flash_string(int s, float x) {
-    if (s < 0 || s >= N_STRINGS) return;
-    fluid_hit(s, x, 1.0f);
-}
-
-void ui_touch_glow(float x0, float y0, float x1, float y1) {
-    /* подпитать все струны, через которые палец прошёл за кадр */
+void ui_touch_glow(float x0, float y0, float x1, float y1, int down) {
     float p0 = strum_pos_from_xy(x0, y0), p1 = strum_pos_from_xy(x1, y1);
     int s0 = (int)p0, s1 = (int)p1;
-    int step = s1 >= s0 ? 1 : -1;
-    for (int s = s0 + step; s != s1 + step && s0 != s1; s += step) {
-        if (s == s1) break;
-        float t = (((float)s + 0.5f) - p0) / (p1 - p0);    /* где палец пересёк струну */
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-        FDrop *d = fdrop_new();                             /* пройденная по пути: спокойная капля */
-        d->s = s; d->x = clampx(x0 + (x1 - x0) * t); d->v = 0.0f; d->w = 10.0f; d->amt = 0.4f; d->feed = 0;
+    if (down) fluid_hit(s1, x1, 1.0f);                      /* касание: удар по струне под пальцем */
+    /* все струны, через которые палец прошёл за кадр, загораются одинаково - без "зебры" */
+    if (s0 != s1) {
+        int step = s1 > s0 ? 1 : -1;
+        for (int s = s0 + step;; s += step) {
+            float t = (((float)s + (step > 0 ? 0.0f : 1.0f)) - p0) / (p1 - p0);   /* где пересёк край струны */
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
+            fluid_hit(s, x0 + (x1 - x0) * t, 1.0f);
+            if (s == s1) break;
+        }
     }
-    fluid_feed(s1, x1, 0.7f);                               /* струна под пальцем */
+    fluid_feed(s1, x1, 0.7f);                               /* палец на струне подпитывает каплю */
 }
 
 int ui_hit(float x, float y, int *index) {
@@ -747,7 +775,7 @@ int ui_hit(float x, float y, int *index) {
     /* колесо: вся долька круга - кнопка */
     float dx = x - WHEEL_CX, dy = y - WHEEL_CY, d = sqrtf(dx * dx + dy * dy);
     if (d > BEZEL_R + 6) return HIT_NONE;
-    if (d < CENTER_R + 4) return HIT_CENTER;
+    if (d < CENTER_R + 4) { *index = dy > 0.0f; return HIT_QUAL; }   /* сверху мажор, снизу минор */
     float a = atan2f(dy, dx) * 180.0f / PI_F + 90.0f;    /* от верхней точки по часовой, 0..360 */
     while (a < 0.0f) a += 360.0f;
     while (a >= 360.0f) a -= 360.0f;

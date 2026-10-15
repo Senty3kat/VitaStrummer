@@ -17,13 +17,21 @@ static void on_hit(int zone, float frac, void *u) { (void)u; if (nhits < 64) { f
 
 static void test_theory(void) {
     CHECK(chord_mask(0, 0) == ((1 << 0) | (1 << 4) | (1 << 7)));          /* C maj */
-    CHECK(chord_mask(9, 1) == ((1 << 9) | (1 << 0) | (1 << 4)));          /* A min */
+    CHECK(chord_mask(9, chord_type(1, 0)) == ((1 << 9) | (1 << 0) | (1 << 4)));   /* A min */
+    CHECK(chord_mask(0, chord_type(0, 7)) == ((1 << 0) | (1 << 5) | (1 << 7)));   /* Csus4 */
+    CHECK(chord_mask(0, chord_type(0, 8)) == ((1 << 0) | (1 << 4) | (1 << 8)));   /* Caug */
+    CHECK(chord_mask(11, chord_type(1, 8)) == ((1 << 11) | (1 << 2) | (1 << 5))); /* Bdim */
     CHECK(snap_to_mask(61, chord_mask(0, 0)) == 60);                       /* C# -> C (вниз при равенстве нет: 1 и 3) */
     CHECK(snap_to_mask(62, chord_mask(0, 0)) == 60);                       /* D: C на 2, E на 2 -> нижний */
     CHECK(snap_to_mask(66, chord_mask(0, 0)) == 67);                       /* F# -> G */
 
     char b[16];
-    chord_name(b, sizeof(b), 9, 6); CHECK(strcmp(b, "Am7") == 0);
+    chord_name(b, sizeof(b), 9, chord_type(1, 1)); CHECK(strcmp(b, "Am7") == 0);
+    chord_name(b, sizeof(b), 0, chord_type(1, 0)); CHECK(strcmp(b, "Cm") == 0);
+    chord_name(b, sizeof(b), 0, chord_type(1, 2)); CHECK(strcmp(b, "CmM7") == 0);
+    chord_name(b, sizeof(b), 5, chord_type(0, 7)); CHECK(strcmp(b, "Fsus4") == 0);
+    chord_name(b, sizeof(b), 7, chord_type(0, 4)); CHECK(strcmp(b, "G9") == 0);
+    CHECK(strcmp(type_label(chord_type(1, 3)), "m6") == 0 && strcmp(type_label(chord_type(0, 3)), "6") == 0);
     chord_name(b, sizeof(b), 6, 0); CHECK(strcmp(b, "F#") == 0);
     note_name(b, sizeof(b), 61);   CHECK(strcmp(b, "C#4") == 0);
     note_name(b, sizeof(b), 84);   CHECK(strcmp(b, "C6") == 0);
@@ -36,9 +44,9 @@ static void test_theory(void) {
     /* в любом аккорде: не больше двух струн подряд на звук, только звуки аккорда, строго вверх,
      * диапазон шире клавиатуры (у трезвучий - больше 4 октав) */
     for (int root = 0; root < 12; root++)
-        for (int mod = 0; mod < N_MODS; mod++) {
-            stringmap_build(&m, 1, root, mod, 60);
-            int mask = chord_mask(root, mod);
+        for (int t = 0; t < N_TYPES; t++) {
+            stringmap_build(&m, 1, root, t, 60);
+            int mask = chord_mask(root, t), iv[MAX_CHORD];
             CHECK(m.nzones == (N_STRINGS + CHORD_SPREAD - 1) / CHORD_SPREAD);
             for (int z = 0; z < m.nzones; z++) {
                 CHECK(m.zone_hi[z] - m.zone_lo[z] + 1 <= 2);
@@ -47,18 +55,18 @@ static void test_theory(void) {
             }
             int span = m.zone_note[m.nzones - 1] - m.zone_note[0];
             CHECK(span > 24);
-            if (mod <= 3) CHECK(span >= 45);
+            if (chord_intervals(t, iv) == 3) CHECK(span >= 45);     /* трезвучия - больше 4 октав */
             CHECK(m.zone_note[0] >= 40 && m.zone_note[m.nzones - 1] <= 108);   /* слышимый диапазон */
         }
     stringmap_build(&m, 1, 0, 0, 60);
     printf("C major:");
     for (int z = 0; z < m.nzones; z++) { note_name(b, sizeof(b), m.zone_note[z]); printf(" %s", b); }
     printf("\nAm7:    ");
-    stringmap_build(&m, 1, 9, 6, 60);
+    stringmap_build(&m, 1, 9, chord_type(1, 1), 60);
     for (int z = 0; z < m.nzones; z++) { note_name(b, sizeof(b), m.zone_note[z]); printf(" %s", b); }
     printf("\n");
 
-    int nt[MAX_CHORD], n = pad_voicing(7, 4, nt);    /* G7 */
+    int nt[MAX_CHORD], n = pad_voicing(7, chord_type(0, 1), nt);    /* G7 */
     CHECK(n == 4 && nt[0] == 43 && nt[3] == 53);
 }
 
@@ -154,10 +162,10 @@ static void test_synth(void) {
         /* каждые ~16 мс "кадр тача" - раз в 3 блока */
         if (blk == 10) { stringmap_build(&m, 0, 0, 0, 60); for (int i = 0; i < 25; i++) synth_strum(m.note[i], i * 400); }
         if (blk == 300) { stringmap_build(&m, 1, 0, 0, 60); for (int z = 0; z < m.nzones; z++) synth_strum(m.zone_note[z], z * 600); }
-        if (blk == 470) { stringmap_build(&m, 1, 9, 6, 60); for (int z = m.nzones - 1, k = 0; z >= 0; z--, k++) synth_strum(m.zone_note[z], k * 500); }
+        if (blk == 470) { stringmap_build(&m, 1, 9, chord_type(1, 1), 60); for (int z = m.nzones - 1, k = 0; z >= 0; z--, k++) synth_strum(m.zone_note[z], k * 500); }
         if (blk == 700) { int nt[6], n = pad_voicing(0, 0, nt); synth_pad(nt, n); }
-        if (blk == 1000) { int nt[6], n = pad_voicing(7, 4, nt); synth_pad(nt, n); }
-        if (blk == 1250) { int nt[6], n = pad_voicing(9, 6, nt); synth_pad(nt, n); }
+        if (blk == 1000) { int nt[6], n = pad_voicing(7, chord_type(0, 1), nt); synth_pad(nt, n); }
+        if (blk == 1250) { int nt[6], n = pad_voicing(9, chord_type(1, 1), nt); synth_pad(nt, n); }
         if (blk == 1500) synth_pad(NULL, 0);
         (void)t;
         synth_render(out + pos, G);

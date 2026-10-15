@@ -1,13 +1,14 @@
 /*
- * Vita Strummer - версия 0.4
+ * Vita Strummer - версия 0.5
  *
- * Слева колесо: большой круг - тоника, малый - модификатор аккорда.
- *   Касание тоники - аккорд "залипает"; повторное касание той же тоники - сброс.
- *   Касание модификатора - сменить тип аккорда (выбран всегда, по умолчанию maj).
- *   Касание звезды в середине или кнопка Круг - сброс аккорда.
+ * Колесо слева, аккорд выбирается в три шага:
+ *   1. внешнее кольцо - тоника. Касание - аккорд "залипает"; повторное касание той же тоники - сброс;
+ *   2. центр - качество: верхняя половина maj, нижняя min;
+ *   3. внутреннее кольцо - модификатор (подписи показывают итог: 7 / m7, maj7 / mM7, sus4 ...).
+ *   Кнопка Круг - сброс аккорда.
  * Справа 25 клавиш C4..C6, каждая переходит в свою струну. Без аккорда - хроматика,
- *   с аккордом каждая струна подтягивается к ближайшему звуку аккорда, одинаковые соседние
- *   струны сливаются в одну зону. Играть можно и по клавишам, и по струнам.
+ *   с аккордом струны идут парами: каждая пара - следующий звук аккорда вверх (около 4 октав).
+ *   Играть можно и по клавишам, и по струнам.
  * Сверху:
  *   MODE (или SELECT): Strum - звучат струны; Pad - аккорд звучит, пока выбран, струны тоже играют
  *   OCTAVE (или L / R): сдвиг струн и пэда на октаву, -2..+2
@@ -65,7 +66,7 @@ static int base_note(void) { return STRING_BASE_NOTE + 12 * st.octave; }
 static void send_pad(void) {
     int notes[MAX_CHORD], n = 0;
     if (st.mode == MODE_PAD && st.chord_on) {
-        n = pad_voicing(st.root, st.mod, notes);
+        n = pad_voicing(st.root, chord_type(st.minor, st.mod), notes);
         for (int i = 0; i < n; i++) notes[i] += 12 * st.octave;
     }
     if (n == pad_sent_n && memcmp(notes, pad_sent, sizeof(int) * n) == 0) return;
@@ -75,24 +76,16 @@ static void send_pad(void) {
 }
 
 static void apply_state(void) {
-    stringmap_build(&smap, st.chord_on, st.root, st.mod, base_note());
+    stringmap_build(&smap, st.chord_on, st.root, chord_type(st.minor, st.mod), base_note());
     for (int i = 0; i < MAX_FINGERS; i++) strum_remap(&fingers[i], &smap);
     ui_set_state(&st, &smap);
     send_pad();
 }
 
-/* палец в прошлом и текущем кадре (x и положение по струнам): по доле кадра находим,
- * какая именно струна задета и в какой точке - от неё пойдёт подсветка */
-static float g_hit_x0, g_hit_x1, g_hit_p0, g_hit_p1;
-
 static void on_strum(int zone, float frac, void *user) {
     (void)user;
     int delay = (int)(frac * g_frame_dt * (float)SYNTH_RATE);
     audio_strum(smap.zone_note[zone], delay);
-    int s = (int)(g_hit_p0 + (g_hit_p1 - g_hit_p0) * frac);
-    if (s < smap.zone_lo[zone]) s = smap.zone_lo[zone];
-    if (s > smap.zone_hi[zone]) s = smap.zone_hi[zone];
-    ui_flash_string(s, g_hit_x0 + (g_hit_x1 - g_hit_x0) * frac);
 }
 
 static StrumFinger *finger_find(int id) {
@@ -124,7 +117,7 @@ static int touch_down_ui(int kind, int idx) {
         else { st.chord_on = 1; st.root = idx; }
         break;
     case HIT_MOD:    st.mod = idx; break;
-    case HIT_CENTER: st.chord_on = 0; break;
+    case HIT_QUAL:   st.minor = idx; break;
     case HIT_MODE:   st.mode = idx; break;
     case HIT_OCT:    octave_step(idx); break;
     default:         return 0;
@@ -207,10 +200,8 @@ int main(void) {
 
             StrumFinger *f = finger_find(id);
             if (f) {
-                float p = strum_pos_from_xy(x, y);
-                g_hit_x0 = f->x; g_hit_x1 = x; g_hit_p0 = f->pos; g_hit_p1 = p;
-                strum_move(f, p, &smap, on_strum, NULL);
-                ui_touch_glow(f->x, f->y, x, y);
+                strum_move(f, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
+                ui_touch_glow(f->x, f->y, x, y, 0);
                 f->x = x; f->y = y;
                 continue;
             }
@@ -220,11 +211,9 @@ int main(void) {
             if (kind == HIT_PLATE) {
                 StrumFinger *fr = finger_find(-1);
                 if (fr) {
-                    float p = strum_pos_from_xy(x, y);
-                    g_hit_x0 = g_hit_x1 = x; g_hit_p0 = g_hit_p1 = p;
                     fr->x = x; fr->y = y;
-                    strum_down(fr, id, p, &smap, on_strum, NULL);
-                    ui_touch_glow(x, y, x, y);
+                    strum_down(fr, id, strum_pos_from_xy(x, y), &smap, on_strum, NULL);
+                    ui_touch_glow(x, y, x, y, 1);
                 }
             } else if (touch_down_ui(kind, idx)) {
                 Held *h = held_find(-1);

@@ -5,7 +5,8 @@
 #include <stddef.h>
 
 #define N_ROOTS 12
-#define N_MODS 9
+#define N_MODS 9                 /* кнопок модификаторов */
+#define N_TYPES (2 * N_MODS)     /* типов аккордов: мажор и минор x модификатор */
 #define N_STRINGS 25
 #define STRING_BASE_NOTE 60      /* нижняя струна при октаве 0 - C4 (MIDI 60), верхняя - C6 */
 #define CHORD_SPREAD 2           /* в аккорде: сколько соседних струн играют один звук */
@@ -17,22 +18,25 @@
 extern const int ROOT_ORDER[N_ROOTS];
 
 const char *root_label(int pc);       /* как на колесе: C G D ... Db Ab Eb Bb F */
-const char *mod_label(int mod);       /* maj, min, dim ... */
-const char *mod_suffix(int mod);      /* "", "m", "dim" ... для названия аккорда */
+/* Тип аккорда t = качество (0 мажор, 1 минор) x модификатор (кнопка внутреннего круга) */
+int chord_type(int minor, int mod);
+const char *type_label(int t);        /* подпись на кнопке: maj, 7, sus4 ... / min, m7, mM7 ... */
+const char *type_suffix(int t);       /* для названия аккорда: "", "m7", "sus4" ... */
+const char *type_long(int t);         /* для табло: "major", "minor 7" ... */
 
 /* интервалы от тоники (могут быть >= 12, например add9), возвращает количество */
-int chord_intervals(int mod, int *iv);
+int chord_intervals(int t, int *iv);
 
 /* 12-битная маска звуковысотных классов аккорда */
-int chord_mask(int root, int mod);
+int chord_mask(int root, int t);
 
 /* ближайший к note звук из маски; при равенстве - нижний */
 int snap_to_mask(int note, int mask);
 
 /* ноты пэда: тесное расположение вокруг середины малой октавы */
-int pad_voicing(int root, int mod, int *notes);
+int pad_voicing(int root, int t, int *notes);
 
-void chord_name(char *out, size_t cap, int root, int mod);
+void chord_name(char *out, size_t cap, int root, int t);
 void note_name(char *out, size_t cap, int midi);   /* "C#4" */
 
 /* Раскладка струн. Без аккорда каждая струна - своя нота (хроматика от base).
@@ -49,9 +53,6 @@ typedef struct {
 } StringMap;
 
 /* base - нота нижней струны (всегда C, сдвиг по октавам) */
-void stringmap_build(StringMap *m, int chord_on, int root, int mod, int base);
-
-/* полное название типа аккорда для табло: "major", "minor 7" ... */
-const char *mod_long(int mod);
+void stringmap_build(StringMap *m, int chord_on, int root, int t, int base);
 
 #endif
