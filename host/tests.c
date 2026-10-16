@@ -138,6 +138,38 @@ static void test_keys(void) {
     }
 }
 
+/* аппликатуры гитары: известные формы */
+static void test_guitar(void) {
+    struct { int root, minor, mod; const char *shape; } K[] = {
+        { 0, 0, 0, "x 3 2 0 1 0" }, { 7, 0, 0, "3 2 0 0 0 3" }, { 2, 0, 0, "x x 0 2 3 2" },
+        { 9, 0, 0, "x 0 2 2 2 0" }, { 4, 0, 0, "0 2 2 1 0 0" }, { 9, 1, 0, "x 0 2 2 1 0" },
+        { 4, 1, 0, "0 2 2 0 0 0" }, { 2, 1, 0, "x x 0 2 3 1" }, { 5, 0, 0, "1 3 3 2 1 1" },
+        { 11, 1, 0, "x 2 4 4 3 2" }, { 7, 0, 1, "3 2 0 0 0 1" }, { 9, 1, 1, "x 0 2 0 1 0" },
+        { 0, 0, 2, "x 3 2 0 0 0" }, { 4, 0, 1, "0 2 0 1 0 0" },
+    };
+    char b[32];
+    for (unsigned i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
+        GuitarChord g;
+        guitar_voicing(&g, 1, K[i].root, chord_type(K[i].minor, K[i].mod), 0);
+        guitar_shape_str(&g, b, sizeof(b));
+        if (strcmp(b, K[i].shape)) { printf("FAIL guitar %d: %s != %s\n", (int)i, b, K[i].shape); fails++; }
+    }
+    /* любой аккорд: все звуки из аккорда, тоника есть, звучит не меньше 4 струн, хватает 4 пальцев */
+    for (int r = 0; r < 12; r++)
+        for (int t = 0; t < N_TYPES; t++) {
+            GuitarChord g;
+            guitar_voicing(&g, 1, r, t, 0);
+            int mask = chord_mask(r, t), got = 0, snd = 0;
+            for (int s = 0; s < N_GSTR; s++)
+                if (g.fret[s] >= 0) { snd++; got |= 1 << (g.note[s] % 12); CHECK(mask & (1 << (g.note[s] % 12))); }
+            CHECK(snd >= 4);
+            CHECK(got & (1 << r));
+        }
+    GuitarChord g;
+    guitar_voicing(&g, 0, 0, 0, 12);                  /* без аккорда - открытые струны, со сдвигом */
+    for (int s = 0; s < N_GSTR; s++) CHECK(g.fret[s] == 0 && g.note[s] == GT_TUNING[s] + 12);
+}
+
 static void wav_write(const char *path, const int16_t *s, int n) {
     FILE *f = fopen(path, "wb");
     if (!f) return;
@@ -177,10 +209,38 @@ static void test_synth(void) {
     free(out);
 }
 
+/* звук гитары: удар вниз по G, потом одна и та же нота E4 на трёх струнах - открытая тонкая,
+ * B-струна 5 лад, G-струна 9 лад (должны звучать по-разному), в конце удар по заглушённым струнам.
+ * Пишет out/guitar_demo.wav; проверка: нет перегруза, всё затухает */
+static void test_guitar_sound(void) {
+    const int G = 256, total = SYNTH_RATE * 9;
+    int16_t *out = calloc((size_t)total, 2);
+    synth_init();
+    GuitarChord gc;
+    guitar_voicing(&gc, 1, 7, chord_type(0, 0), 0);
+    int pos = 0, clip = 0;
+    for (int blk = 0; pos + G <= total; blk++, pos += G) {
+        if (blk == 5)  for (int s = 0; s < N_GSTR; s++) synth_guitar(s, gc.note[s], s * 500, 0.9f);
+        if (blk == 300) synth_guitar(5, 64, 0, 0.8f);
+        if (blk == 420) synth_guitar(4, 64, 0, 0.8f);
+        if (blk == 540) synth_guitar(3, 64, 0, 0.8f);
+        if (blk == 700) { for (int s = 0; s < N_GSTR; s++) synth_guitar(s, -(GT_TUNING[s]), s * 300, 0.7f); }
+        synth_render(out + pos, G);
+        for (int i = 0; i < G; i++) if (out[pos + i] >= 32000 || out[pos + i] <= -32000) clip++;
+    }
+    CHECK(clip == 0);
+    CHECK(synth_guitar_active() == 0);
+    printf("guitar: clipped %d\n", clip);
+    wav_write("out/guitar_demo.wav", out, pos);
+    free(out);
+}
+
 int main(void) {
     test_theory();
     test_strum();
     test_keys();
+    test_guitar();
+    test_guitar_sound();
     test_synth();
     printf(fails ? "\n%d FAILED\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;

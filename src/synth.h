@@ -16,6 +16,15 @@ void synth_strum(int note, int delay);
 /* заменить звучащий аккорд пэда (n = 0 - тишина) */
 void synth_pad(const int *notes, int n);
 void synth_all_off(void);
+/* громкость слоёв 0..1: струны (страммер и гитара) и пэд */
+void synth_volume(float strings, float pad);
+
+/* гитара: щипок струны s (0 - самая толстая) нотой note; note < 0 - заглушенная струна
+ * (-нота открытой струны: короткий глухой стук). vel 0..1 - сила удара */
+#define N_GSTR_SYNTH 6
+void synth_guitar(int s, int note, int delay, float vel);
+void synth_guitar_damp(int mask);       /* заглушить струны по маске битов */
+int  synth_guitar_active(void);
 /* следующий блок, моно */
 void synth_render(int16_t *out, int n);
 

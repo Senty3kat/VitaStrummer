@@ -86,6 +86,10 @@ void vita2d_draw_texture_tint_part(const vita2d_texture *t, float x, float y, fl
         }
 }
 
+void vita2d_draw_texture_part(const vita2d_texture *t, float x, float y, float tx, float ty, float tw, float th) {
+    vita2d_draw_texture_tint_part(t, x, y, tx, ty, tw, th, 0xFFFFFFFFu);
+}
+
 void vita2d_draw_texture_tint(const vita2d_texture *t, float x, float y, unsigned int color) {
     vita2d_draw_texture_tint_part(t, x, y, 0, 0, (float)t->w, (float)t->h, color);
 }

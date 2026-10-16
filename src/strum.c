@@ -1,5 +1,6 @@
 #include "strum.h"
 #include "layout.h"
+#include <math.h>
 
 /* насколько надо зайти за границу зоны, чтобы она сменилась (в долях струны):
  * палец, лежащий на границе, не "дребезжит" */
@@ -65,6 +66,22 @@ float strum_pos_from_xy(float x, float y) {
     float p = pk + (ps - pk) * w;
     if (p < 0.0f) p = 0.0f;
     if (p > (float)N_STRINGS - 0.001f) p = (float)N_STRINGS - 0.001f;
+    return p;
+}
+
+float gtr_pitch(void) { return (float)(GT_BOTTOM - GT_TOP) / (float)N_GSTR; }
+float gtr_string_y(int i) { return (float)GT_TOP + ((float)i + 0.5f) * gtr_pitch(); }
+float gtr_thick(int i) {
+    static const float T[N_GSTR] = { 15.0f, 12.5f, 10.5f, 8.5f, 6.5f, 5.0f };
+    return T[i < 0 ? 0 : (i >= N_GSTR ? N_GSTR - 1 : i)];
+}
+float gtr_fret_x(int f) {                /* как на настоящем грифе: каждый лад короче предыдущего */
+    return (float)GT_NUT_X1 + GT_SCALE * (1.0f - powf(2.0f, -(float)f / 12.0f));
+}
+float gtr_pos_from_y(float y) {
+    float p = (y - (float)GT_TOP) / gtr_pitch();
+    if (p < 0.0f) p = 0.0f;
+    if (p > (float)N_GSTR - 0.001f) p = (float)N_GSTR - 0.001f;
     return p;
 }
 

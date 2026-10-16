@@ -18,6 +18,13 @@ float key_center_y(int i);               /* центр клавиши слева
 /* белая клавиша: передняя часть [y0, y1], задняя (между чёрными) [b0, b1] */
 void  white_key_extents(int i, float *y0, float *y1, float *b0, float *b1);
 
+/* ---- гитара: 6 струн, 0 - самая толстая, сверху ---- */
+float gtr_pitch(void);
+float gtr_string_y(int i);
+float gtr_thick(int i);                  /* толщина струны на экране */
+float gtr_fret_x(int f);                 /* x лада f (0 - порожек) */
+float gtr_pos_from_y(float y);           /* положение пальца в "струнах" 0..N_GSTR */
+
 /* положение пальца в "струнах" (0..N_STRINGS): над полосами - по полосам, над клавишами -
  * по клавишам, между ними плавный переход (без скачков при движении вбок) */
 float strum_pos_from_xy(float x, float y);

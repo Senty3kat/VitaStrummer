@@ -17,8 +17,9 @@
 #define CAP_Y 10
 #define CAP_W 378
 #define CAP_H 48
-#define RADIO_STRUM_X 266     /* центр светодиода */
-#define RADIO_PAD_X 350
+#define RADIO_STRUM_X 262     /* центры светодиодов режимов */
+#define RADIO_PAD_X 326
+#define RADIO_GTR_X 374
 #define RADIO_Y 44
 #define OCT_X 452             /* "пилюля" октавы */
 #define OCT_Y 31
@@ -28,6 +29,26 @@
 #define LCD_Y 12
 #define LCD_W 216
 #define LCD_H 44
+
+/* громкость (справа от табло): в Pad - громкость пэда, в остальных режимах - струн */
+#define VOL_X 852
+#define VOL_Y 12
+#define VOL_W 96
+#define VOL_H 44
+#define VOL_TX0 866           /* дорожка ручки */
+#define VOL_TX1 934
+#define VOL_TY 42
+
+/* быстрые аккорды: две крестовины в углах слева от колеса - D-pad сверху, стик снизу */
+#define QS_N 8
+#define QS_DPAD_CX 54
+#define QS_DPAD_CY 104
+#define QS_STICK_CX 54
+#define QS_STICK_CY 498
+#define QS_DX 31              /* смещение боковых "кнопок" крестовины */
+#define QS_DY 19
+#define QS_W 30
+#define QS_H 16
 
 /* колесо аккордов */
 #define WHEEL_CX 250
@@ -70,5 +91,20 @@
 #define BULB_TSTART 0.40f     /* с какой доли пути нить начинает утолщаться */
 #define BAR_X1 932            /* подписей нот нет - полосы до самого края */
 #define LINE_T 2.2f           /* толщина нити */
+
+
+/* режим "Гитара": гриф на струнной панели. Головка слева, как смотрит гитарист на свой гриф:
+ * толстая струна сверху, проведение вниз = удар вниз (от басов к тонким) */
+#define GT_TOP 78             /* область струн по высоте */
+#define GT_BOTTOM 522
+#define GT_NUT_X0 536         /* порожек */
+#define GT_NUT_X1 548
+#define GT_STR_X0 540         /* струны начинаются у порожка */
+#define GT_STR_X1 930
+#define GT_SCALE 652.0f       /* мензура в пикселях: лады 1..9 укладываются до ~820 */
+#define GT_FRETS 9
+#define GT_MARK_X 522         /* метки "x" / "o" слева от порожка */
+#define GT_HOLE_CX 1010.0f    /* розетка резонаторного отверстия справа (видна частью) */
+#define GT_HOLE_R 140.0f
 
 #endif

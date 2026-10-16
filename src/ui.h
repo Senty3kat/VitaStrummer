@@ -4,15 +4,19 @@
 
 #include "theory.h"
 
-enum { MODE_STRUM = 0, MODE_PAD = 1 };
+enum { MODE_STRUM = 0, MODE_PAD = 1, MODE_GUITAR = 2, N_MODES = 3 };
 
 typedef struct {
-    int mode;        /* MODE_STRUM / MODE_PAD */
+    int mode;        /* MODE_STRUM / MODE_PAD / MODE_GUITAR */
     int chord_on;    /* аккорд "залип" */
     int root;        /* высота тоники 0..11 */
     int minor;       /* качество: 0 мажор, 1 минор (кнопки в центре колеса) */
     int mod;         /* модификатор 0..N_MODS-1, выбран всегда */
     int octave;      /* сдвиг струн и пэда, OCT_MIN..OCT_MAX */
+    int vol_strings; /* громкость струн (страммер и гитара), 0..100 */
+    int vol_pad;     /* громкость пэда, 0..100 */
+    int quick[8];    /* быстрые аккорды (D-pad вверх/вправо/вниз/влево, стик так же): 0 - пусто,
+                        иначе quick_code() */
 } AppState;
 
 typedef struct {
@@ -21,7 +25,13 @@ typedef struct {
     int show;        /* показывать отладку */
 } UiDebug;
 
-enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT };
+enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK };
+
+/* код быстрого аккорда (0 - пусто) */
+static inline int quick_code(int root, int minor, int mod) { return 1 + root + 12 * minor + 24 * mod; }
+static inline void quick_decode(int c, int *root, int *minor, int *mod) {
+    c -= 1; *root = c % 12; *minor = (c / 12) % 2; *mod = c / 24;
+}
 
 int  ui_init(void);
 void ui_recreate(void);                              /* после "сна": текстуры заново */
@@ -29,7 +39,8 @@ void ui_set_state(const AppState *s, const StringMap *m);
 /* палец на струнной панели (каждый кадр): от (x0,y0) прошлого кадра к (x1,y1) текущего,
  * down = 1 в первый кадр касания. Задетые струны загораются, по ним растекается цвет */
 void ui_touch_glow(float x0, float y0, float x1, float y1, int down);
-/* index: тоника (высота 0..11), модификатор, качество (0 мажор / 1 минор), режим, или шаг октавы (-1 / +1) */
+/* index: тоника (высота 0..11), модификатор, качество (0 мажор / 1 минор), режим, шаг октавы (-1 / +1),
+ * громкость 0..100 (HIT_VOL) или номер быстрого аккорда (HIT_QUICK) */
 int  ui_hit(float x, float y, int *index);
 /* какие кнопки сейчас зажаты пальцами (для "нажатого" вида) */
 void ui_set_held(const int *kinds, const int *indices, int n);

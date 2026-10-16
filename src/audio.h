@@ -12,6 +12,10 @@ void audio_reset_port(void);              /* после "сна" консоли 
 
 void audio_strum(int note, int delay_samples);
 void audio_pad(const int *notes, int n);
+/* гитара: щипок струны (muted - заглушённая, note - нота открытой струны), сила 0..1 */
+void audio_guitar(int string, int note, int muted, float vel, int delay_samples);
+void audio_guitar_damp(int mask);                 /* заглушить струны по маске */
+void audio_volume(int strings, int pad);          /* 0..100 */
 
 /* диагностика для верхней полосы */
 int audio_xruns(void);                    /* сколько раз блок пришёл заметно позже */

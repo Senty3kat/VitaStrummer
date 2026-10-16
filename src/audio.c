@@ -8,7 +8,7 @@
 #include <psp2/audioout.h>
 
 /* ---------- очередь событий ---------- */
-enum { EV_STRUM = 1, EV_PAD = 2 };
+enum { EV_STRUM = 1, EV_PAD = 2, EV_GUITAR = 3, EV_GDAMP = 4, EV_VOL = 5 };
 typedef struct { uint8_t type, n; uint16_t delay; uint8_t notes[8]; } Ev;
 
 #define QSIZE 256                    /* степень двойки */
@@ -45,6 +45,41 @@ void audio_pad(const int *notes, int n) {
     q_push(&e);
 }
 
+/* гитара: notes[0] - струна, notes[1] - нота, notes[2] - 1 если заглушена, notes[3] - сила 0..255 */
+void audio_guitar(int string, int note, int muted, float vel, int delay_samples) {
+    Ev e;
+    memset(&e, 0, sizeof(e));
+    e.type = EV_GUITAR;
+    e.notes[0] = (uint8_t)string;
+    e.notes[1] = (uint8_t)note;
+    e.notes[2] = (uint8_t)(muted ? 1 : 0);
+    if (vel < 0.0f) vel = 0.0f;
+    if (vel > 1.0f) vel = 1.0f;
+    e.notes[3] = (uint8_t)(vel * 255.0f);
+    if (delay_samples < 0) delay_samples = 0;
+    if (delay_samples > 4800) delay_samples = 4800;
+    e.delay = (uint16_t)delay_samples;
+    q_push(&e);
+}
+
+void audio_guitar_damp(int mask) {
+    Ev e;
+    memset(&e, 0, sizeof(e));
+    e.type = EV_GDAMP;
+    e.notes[0] = (uint8_t)mask;
+    q_push(&e);
+}
+
+/* громкость 0..100: notes[0] - струны, notes[1] - пэд */
+void audio_volume(int strings, int pad) {
+    Ev e;
+    memset(&e, 0, sizeof(e));
+    e.type = EV_VOL;
+    e.notes[0] = (uint8_t)(strings < 0 ? 0 : (strings > 100 ? 100 : strings));
+    e.notes[1] = (uint8_t)(pad < 0 ? 0 : (pad > 100 ? 100 : pad));
+    q_push(&e);
+}
+
 /* ---------- поток ---------- */
 static volatile int g_running = 0;
 static volatile int g_reset = 0;
@@ -72,6 +107,13 @@ static void drain_events(void) {
             int nt[8];
             for (int i = 0; i < e.n; i++) nt[i] = e.notes[i];
             synth_pad(nt, e.n);
+        } else if (e.type == EV_GUITAR) {
+            int note = e.notes[1];
+            synth_guitar(e.notes[0], e.notes[2] ? -note : note, e.delay, (float)e.notes[3] / 255.0f);
+        } else if (e.type == EV_GDAMP) {
+            synth_guitar_damp(e.notes[0]);
+        } else if (e.type == EV_VOL) {
+            synth_volume((float)e.notes[0] / 100.0f, (float)e.notes[1] / 100.0f);
         }
     }
 }
@@ -116,7 +158,7 @@ static int audio_thread(SceSize args, void *argp) {
             if (++errs > 100) { g_error = r; sceAudioOutReleasePort(port); port = -1; }
         } else errs = 0;
 
-        g_voices = synth_active_voices();
+        g_voices = synth_active_voices() + synth_guitar_active();
         g_peak = synth_peak();
     }
     if (port >= 0) sceAudioOutReleasePort(port);

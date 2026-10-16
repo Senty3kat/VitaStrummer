@@ -125,3 +125,103 @@ void stringmap_build(StringMap *m, int chord_on, int root, int t, int base) {
         m->zone_of[i] = m->nzones - 1;
     }
 }
+
+/* ---------- гитара ---------- */
+/* стандартный строй: E2 A2 D3 G3 B3 E4, струна 0 - самая толстая */
+const int GT_TUNING[N_GSTR] = { 40, 45, 50, 55, 59, 64 };
+
+/* роль интервала в аккорде: сколько стоит его потерять */
+static int tone_weight(int interval) {
+    switch (interval % 12) {
+    case 0: return 40;                          /* тоника */
+    case 3: case 4: case 2: case 5: return 25;  /* терция (или sus2/sus4 вместо неё) */
+    case 7: return 5;                           /* чистая квинта - можно опустить */
+    default: return 18;                         /* септима, секста, нона, ум./ув. квинта */
+    }
+}
+
+/* Подбор аппликатуры, как сыграл бы гитарист: перебор позиций грифа (окно в 4 лада + открытые
+ * струны), на каждой струне - звук аккорда или глушение (глушить можно только басовые, подряд).
+ * Оценка: все звуки аккорда на месте, в басу тоника (или квинта), больше звучащих струн,
+ * ниже по грифу, хватает четырёх пальцев (баррэ считается одним пальцем). */
+void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift) {
+    if (!chord_on) {                            /* без аккорда - открытые струны */
+        for (int s = 0; s < N_GSTR; s++) { g->fret[s] = 0; g->note[s] = GT_TUNING[s] + shift; }
+        return;
+    }
+    int iv[MAX_CHORD], n = chord_intervals(t, iv), mask = chord_mask(root, t);
+    int best[N_GSTR] = { 0 }, have = 0;
+    float best_score = -1e9f;
+    for (int f0 = 1; f0 <= 6; f0++) {
+        int opt[N_GSTR][6], nopt[N_GSTR];
+        for (int s = 0; s < N_GSTR; s++) {
+            nopt[s] = 0;
+            if (mask & (1 << (GT_TUNING[s] % 12))) opt[s][nopt[s]++] = 0;
+            for (int f = f0; f < f0 + 4; f++)
+                if (mask & (1 << ((GT_TUNING[s] + f) % 12))) opt[s][nopt[s]++] = f;
+            if (s < 2) opt[s][nopt[s]++] = -1;  /* две басовые можно заглушить */
+        }
+        int pick[N_GSTR] = { 0 };
+        for (;;) {
+            int fr[N_GSTR], ok = 1;
+            for (int s = 0; s < N_GSTR; s++) {
+                if (!nopt[s]) { ok = 0; break; }
+                fr[s] = opt[s][pick[s]];
+            }
+            if (ok && fr[1] < 0 && fr[0] >= 0) ok = 0;                 /* глушим только снизу подряд */
+            if (ok) {
+                int mn = 99, mx = 0, nfret = 0, at_min = 0, lo = -1, hi = -1, sounding = 0, opens = 0;
+                for (int s = 0; s < N_GSTR; s++) {
+                    if (fr[s] >= 0) sounding++;
+                    if (fr[s] == 0) opens++;
+                    if (fr[s] > 0) { nfret++; if (fr[s] < mn) mn = fr[s]; if (fr[s] > mx) mx = fr[s]; }
+                }
+                for (int s = 0; s < N_GSTR; s++)
+                    if (fr[s] == mn) { at_min++; if (lo < 0) lo = s; hi = s; }
+                int fingers = (at_min >= 2) ? nfret - at_min + 1 : nfret;
+                if (nfret && mx - mn > 3) ok = 0;
+                if (fingers > 4) ok = 0;
+                if (at_min >= 2 && nfret > 4)                           /* под баррэ не бывает открытых */
+                    for (int s = lo; s <= hi; s++) if (fr[s] == 0) ok = 0;
+                if (ok) {
+                    float sc = 0.0f;
+                    int got = 0, bass = -1;
+                    for (int s = 0; s < N_GSTR; s++)
+                        if (fr[s] >= 0) {
+                            int pc = (GT_TUNING[s] + fr[s]) % 12;
+                            got |= 1 << pc;
+                            if (bass < 0) bass = pc;
+                        }
+                    for (int k = 0; k < n; k++)
+                        if (!(got & (1 << ((root + iv[k]) % 12)))) sc -= (float)tone_weight(iv[k]);
+                    int bi = ((bass - root) % 12 + 12) % 12;
+                    sc += bi == 0 ? 25.0f : (bi == 7 ? 6.0f : -20.0f);
+                    sc += 4.0f * (float)sounding + 1.0f * (float)opens;
+                    if (nfret) sc -= 1.5f * (float)mn + 2.5f * (float)(mx - mn);   /* ниже и без растяжки */
+                    if (mx >= 4) {                       /* открытые внутри высокой позиции звучат чужеродно */
+                        int first = -1, last = -1;
+                        for (int s = 0; s < N_GSTR; s++) if (fr[s] > 0) { if (first < 0) first = s; last = s; }
+                        for (int s = first + 1; s < last; s++) if (fr[s] == 0) sc -= 3.0f;
+                    }
+                    if (sc > best_score) { best_score = sc; have = 1; for (int s = 0; s < N_GSTR; s++) best[s] = fr[s]; }
+                }
+            }
+            int s = 0;                                                 /* следующая комбинация */
+            while (s < N_GSTR && ++pick[s] >= nopt[s]) pick[s++] = 0;
+            if (s == N_GSTR) break;
+        }
+    }
+    for (int s = 0; s < N_GSTR; s++) {
+        g->fret[s] = have ? best[s] : 0;
+        g->note[s] = g->fret[s] >= 0 ? GT_TUNING[s] + g->fret[s] + shift : -1;
+    }
+}
+
+void guitar_shape_str(const GuitarChord *g, char *out, size_t cap) {
+    size_t k = 0;
+    for (int s = 0; s < N_GSTR && k + 2 < cap; s++) {
+        if (s) out[k++] = ' ';
+        out[k++] = g->fret[s] < 0 ? 'x' : (char)('0' + (g->fret[s] > 9 ? 9 : g->fret[s]));
+    }
+    out[k] = 0;
+}

@@ -20,6 +20,7 @@ unsigned int vita2d_texture_get_stride(const vita2d_texture *texture);
 void vita2d_draw_texture(const vita2d_texture *texture, float x, float y);
 void vita2d_draw_texture_scale(const vita2d_texture *texture, float x, float y, float x_scale, float y_scale);
 void vita2d_texture_set_filters(const vita2d_texture *texture, SceGxmTextureFilter min_filter, SceGxmTextureFilter mag_filter);
+void vita2d_draw_texture_part(const vita2d_texture *texture, float x, float y, float tex_x, float tex_y, float tex_w, float tex_h);
 void vita2d_draw_texture_tint(const vita2d_texture *texture, float x, float y, unsigned int color);
 void vita2d_draw_texture_tint_part(const vita2d_texture *texture, float x, float y, float tex_x, float tex_y,
                                    float tex_w, float tex_h, unsigned int color);

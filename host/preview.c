@@ -4,22 +4,42 @@
 #include "../src/strum.h"
 #include <stdio.h>
 #include <time.h>
+#include <string.h>
 
 extern const char *host_frame_name;
 
-static StringMap g_m;
+static StringMap g_m, g_gm;
+static int g_mode;
 static void on_hit(int zone, float frac, void *u) { (void)zone; (void)frac; (void)u; }
 
+/* быстрые аккорды для превью: C, G, Am, F на D-pad; Dm7, Esus4, Cmaj7 на стике, один пустой */
+static void fill_quick(AppState *s) {
+    s->quick[0] = quick_code(0, 0, 0); s->quick[1] = quick_code(7, 0, 0);
+    s->quick[2] = quick_code(9, 1, 0); s->quick[3] = quick_code(5, 0, 0);
+    s->quick[4] = quick_code(2, 1, 1); s->quick[5] = quick_code(4, 0, 7);
+    s->quick[6] = quick_code(0, 0, 2); s->quick[7] = 0;
+}
+
 static void set_state(int mode, int chord_on, int root, int minor, int mod, int octave) {
-    AppState s = { mode, chord_on, root, minor, mod, octave };
+    AppState s;
+    memset(&s, 0, sizeof(s));
+    s.mode = mode; s.chord_on = chord_on; s.root = root; s.minor = minor; s.mod = mod; s.octave = octave;
+    s.vol_strings = 70; s.vol_pad = 45;
+    fill_quick(&s);
+    g_mode = mode;
     stringmap_build(&g_m, chord_on, root, chord_type(minor, mod), STRING_BASE_NOTE + 12 * octave);
+    g_gm.nzones = N_GSTR;                         /* гитарные зоны: зона = струна */
+    for (int i = 0; i < N_GSTR; i++) { g_gm.zone_of[i] = i; g_gm.zone_lo[i] = g_gm.zone_hi[i] = i; }
     ui_set_state(&s, &g_m);
     ui_set_held(NULL, NULL, 0);
 }
 
+static float pos_of(float x, float y) { return g_mode == MODE_GUITAR ? gtr_pos_from_y(y) : strum_pos_from_xy(x, y); }
+static const StringMap *map_of(void) { return g_mode == MODE_GUITAR ? &g_gm : &g_m; }
+
 static void shot(const char *name, int held_kind, int held_idx) {
     ui_set_held(&held_kind, &held_idx, held_kind ? 1 : 0);
-    UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
+    UiDebug d = { 0, 0, 0, 0, 60.0f, 0 };
     host_frame_name = name;
     ui_draw(0.001f, &d);
     ui_set_held(NULL, NULL, 0);
@@ -31,19 +51,19 @@ typedef void (*Path)(int fr, float *x, float *y);
 
 static void run(const char *prefix, Path path, int touch_frames, int frames_total) {
     static char name[64];
-    UiDebug d = { 0, 0, 0, 0, 60.0f, 1 };
+    UiDebug d = { 0, 0, 0, 0, 60.0f, 0 };
     StrumFinger f;
     for (int fr = 0; fr < frames_total; fr++) {
         if (fr < touch_frames) {
             float x, y;
             path(fr, &x, &y);
-            float p = strum_pos_from_xy(x, y);
+            float p = pos_of(x, y);
             if (fr == 0) {
                 f.x = x; f.y = y;
-                strum_down(&f, 1, p, &g_m, on_hit, NULL);
+                strum_down(&f, 1, p, map_of(), on_hit, NULL);
                 ui_touch_glow(x, y, x, y, 1);
             } else {
-                strum_move(&f, p, &g_m, on_hit, NULL);
+                strum_move(&f, p, map_of(), on_hit, NULL);
                 ui_touch_glow(f.x, f.y, x, y, 0);
                 f.x = x; f.y = y;
             }
@@ -68,6 +88,14 @@ static void path_key(int fr, float *x, float *y) { (void)fr; *x = 596.0f; *y = 3
 /* палец лежит на струне и медленно ведёт вдоль неё */
 static void path_hold(int fr, float *x, float *y) { *x = 700.0f + 6.0f * (float)fr; *y = 250.0f; }
 
+/* гитара: удар вниз по всем струнам (сверху вниз) */
+static void path_gdown(int fr, float *x, float *y) {
+    float t = (float)fr / 10.0f;
+    if (t > 1.0f) t = 1.0f;
+    *x = 880.0f - 40.0f * t;
+    *y = 84.0f + 430.0f * t;
+}
+
 int main(void) {
     clock_t t0 = clock();
     if (!ui_init()) { printf("ui_init failed\n"); return 1; }
@@ -89,5 +117,15 @@ int main(void) {
     run("keys", path_key, 2, 45);
     set_state(MODE_STRUM, 0, 0, 0, 0, 0);
     run("hold", path_hold, 30, 55);
+
+    /* гитара: G (открытая позиция), F (баррэ), Am7, без аккорда; проведение вниз по струнам */
+    set_state(MODE_GUITAR, 1, 7, 0, 0, 0);
+    shot("screen_guitar_G", 0, 0);
+    set_state(MODE_GUITAR, 1, 5, 0, 0, 0);
+    shot("screen_guitar_F", HIT_ROOT, 5);
+    set_state(MODE_GUITAR, 0, 0, 0, 0, 0);
+    shot("screen_guitar_open", 0, 0);
+    set_state(MODE_GUITAR, 1, 9, 1, 1, 0);
+    run("gtr", path_gdown, 12, 60);
     return 0;
 }
