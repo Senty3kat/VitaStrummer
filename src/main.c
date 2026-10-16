@@ -1,5 +1,5 @@
 /*
- * Vita Strummer - версия 0.7
+ * Vita Strummer - версия 0.8
  *
  * Колесо слева, аккорд выбирается в три шага:
  *   1. внешнее кольцо - тоника. Касание - аккорд "залипает"; повторное касание той же тоники - сброс;
@@ -19,7 +19,8 @@
  * Сверху:
  *   MODE (или короткое нажатие SELECT): Strum - звучат струны; Pad - аккорд звучит, пока выбран,
  *     струны тоже играют; Guitar - 6 гитарных струн, аккорд в гитарной аппликатуре, у каждой струны
- *     свой тембр; сила удара зависит от скорости проведения
+ *     свой тембр; сила удара зависит от скорости проведения. Под грифом - полоска позиций:
+ *     номер лада - сыграть аккорд в этой позиции (рука с этого лада), AUTO - лучшая позиция
  *   VOLUME (справа сверху): в Pad - громкость пэда, в остальных режимах - струн
  *   OCTAVE (или L / R): сдвиг струн и пэда на октаву, -2..+2
  *   START - показать/скрыть отладку (кадры, голоса, опоздания аудио)
@@ -89,7 +90,7 @@ static int base_note(void) { return STRING_BASE_NOTE + 12 * st.octave; }
 
 /* ---------- настройки: режим, октава, громкость, быстрые аккорды ---------- */
 #define SET_MAGIC 0x53545231u          /* "STR1" */
-typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor; } Settings;
+typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos; } Settings;
 static int set_dirty = 0;
 static uint64_t set_dirty_t = 0;
 
@@ -109,6 +110,7 @@ static void settings_load(void) {
     st.key_on = s.key_on ? 1 : 0;
     if (s.key_root >= 0 && s.key_root < 12) st.key_root = s.key_root;
     st.key_minor = s.key_minor ? 1 : 0;
+    if (s.gpos >= 0 && s.gpos <= GT_POS_MAX) st.gpos = s.gpos;
 }
 
 static void settings_save(void) {
@@ -117,7 +119,7 @@ static void settings_save(void) {
     s.magic = SET_MAGIC; s.size = sizeof(Settings);
     s.mode = st.mode; s.octave = st.octave; s.vol_strings = st.vol_strings; s.vol_pad = st.vol_pad;
     for (int k = 0; k < QS_N; k++) s.quick[k] = st.quick[k];
-    s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor;
+    s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor; s.gpos = st.gpos;
     FILE *f = fopen(SET_TMP, "wb");             /* сначала во временный файл - сбой не испортит старый */
     if (!f) return;
     size_t n = fwrite(&s, 1, sizeof(s), f);
@@ -145,7 +147,7 @@ static void send_pad(void) {
  * переставляют на новый аккорд, а общие ноты продолжают звучать */
 static void build_guitar(void) {
     GuitarChord ng;
-    guitar_voicing(&ng, st.chord_on, st.root, chord_type(st.minor, st.mod), 12 * st.octave);
+    guitar_voicing(&ng, st.chord_on, st.root, chord_type(st.minor, st.mod), 12 * st.octave, st.gpos);
     if (gch_valid && guitar()) {
         int mask = 0;
         for (int s = 0; s < N_GSTR; s++) if (ng.note[s] != gch.note[s]) mask |= 1 << s;
@@ -267,6 +269,11 @@ static int touch_down_ui(int kind, int idx, float x) {
         else { st.chord_on = 1; st.root = idx; key_auto_quality(); }
         break;
     case HIT_KEY:    key_toggle(); break;
+    case HIT_GPOS:                              /* позиция на грифе; повторное касание - снова авто */
+        if (idx < 0) return 1;
+        st.gpos = (idx > 0 && idx == st.gpos) ? 0 : idx;
+        settings_touch();
+        break;
     case HIT_MOD:    st.mod = idx; break;
     case HIT_QUAL:   st.minor = idx; break;
     case HIT_MODE:   set_mode(idx); break;
@@ -290,7 +297,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.7");
+    dbg_log("start v0.8");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));

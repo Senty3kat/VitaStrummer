@@ -150,7 +150,7 @@ static void test_guitar(void) {
     char b[32];
     for (unsigned i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
         GuitarChord g;
-        guitar_voicing(&g, 1, K[i].root, chord_type(K[i].minor, K[i].mod), 0);
+        guitar_voicing(&g, 1, K[i].root, chord_type(K[i].minor, K[i].mod), 0, 0);
         guitar_shape_str(&g, b, sizeof(b));
         if (strcmp(b, K[i].shape)) { printf("FAIL guitar %d: %s != %s\n", (int)i, b, K[i].shape); fails++; }
     }
@@ -158,15 +158,37 @@ static void test_guitar(void) {
     for (int r = 0; r < 12; r++)
         for (int t = 0; t < N_TYPES; t++) {
             GuitarChord g;
-            guitar_voicing(&g, 1, r, t, 0);
+            guitar_voicing(&g, 1, r, t, 0, 0);
             int mask = chord_mask(r, t), got = 0, snd = 0;
             for (int s = 0; s < N_GSTR; s++)
                 if (g.fret[s] >= 0) { snd++; got |= 1 << (g.note[s] % 12); CHECK(mask & (1 << (g.note[s] % 12))); }
             CHECK(snd >= 4);
             CHECK(got & (1 << r));
         }
+    /* позиции: известные формы выше по грифу */
+    struct { int root, minor, pos; const char *shape; } P[] = {
+        { 0, 0, 3, "x 3 5 5 5 3" }, { 0, 0, 8, "8 10 10 9 8 8" }, { 7, 0, 3, "3 5 5 4 3 3" },
+        { 9, 1, 5, "5 7 7 5 5 5" }, { 5, 0, 1, "1 3 3 2 1 1" },
+    };
+    for (unsigned i = 0; i < sizeof(P) / sizeof(P[0]); i++) {
+        GuitarChord gp;
+        guitar_voicing(&gp, 1, P[i].root, chord_type(P[i].minor, 0), 0, P[i].pos);
+        guitar_shape_str(&gp, b, sizeof(b));
+        if (strcmp(b, P[i].shape)) { printf("FAIL guitar pos %d: %s != %s\n", (int)i, b, P[i].shape); fails++; }
+    }
+    /* в любой позиции и для любого аккорда - только звуки аккорда, лады не выше 12 */
+    for (int r = 0; r < 12; r++)
+        for (int t = 0; t < N_TYPES; t++)
+            for (int ps = 1; ps <= GT_POS_MAX; ps++) {
+                GuitarChord gp;
+                guitar_voicing(&gp, 1, r, t, 0, ps);
+                for (int s2 = 0; s2 < N_GSTR; s2++) {
+                    CHECK(gp.fret[s2] <= 12);
+                    if (gp.fret[s2] >= 0) CHECK(chord_mask(r, t) & (1 << (gp.note[s2] % 12)));
+                }
+            }
     GuitarChord g;
-    guitar_voicing(&g, 0, 0, 0, 12);                  /* без аккорда - открытые струны, со сдвигом */
+    guitar_voicing(&g, 0, 0, 0, 12, 0);                  /* без аккорда - открытые струны, со сдвигом */
     for (int s = 0; s < N_GSTR; s++) CHECK(g.fret[s] == 0 && g.note[s] == GT_TUNING[s] + 12);
 }
 
@@ -252,7 +274,7 @@ static void test_guitar_sound(void) {
     int16_t *out = calloc((size_t)total, 2);
     synth_init();
     GuitarChord gc;
-    guitar_voicing(&gc, 1, 7, chord_type(0, 0), 0);
+    guitar_voicing(&gc, 1, 7, chord_type(0, 0), 0, 0);
     int pos = 0, clip = 0;
     for (int blk = 0; pos + G <= total; blk++, pos += G) {
         if (blk == 5)  for (int s = 0; s < N_GSTR; s++) synth_guitar(s, gc.note[s], s * 500, 0.9f);

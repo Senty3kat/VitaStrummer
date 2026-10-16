@@ -13,7 +13,7 @@ include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "Vita Strummer")
 set(VITA_TITLEID  "STRM00001")
-set(VITA_VERSION  "00.70")
+set(VITA_VERSION  "00.80")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -O2 -std=gnu99")
 

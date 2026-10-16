@@ -524,14 +524,28 @@ static void paint_fretboard(Canvas *c) {
         cv_rrect_grad(c, x - 1.2f, GT_TOP + 6 - oy, 2.6f, GT_BOTTOM - GT_TOP - 12, 1.3f,
                       RGBA8(236, 226, 206, 190), RGBA8(196, 184, 160, 190));
     }
-    /* перламутровые точки между струнами 2 и 3 */
-    static const int MARK[4] = { 3, 5, 7, 9 };
-    for (int k = 0; k < 4; k++) {
+    /* перламутровые точки: 3, 5, 7, 9 - посередине, 12 - двойная */
+    static const int MARK[5] = { 3, 5, 7, 9, 12 };
+    for (int k = 0; k < 5; k++) {
         float x = (gtr_fret_x(MARK[k] - 1) + gtr_fret_x(MARK[k])) * 0.5f - ox;
-        cv_circle(c, x, cy + 1.5f, 6.5f, DARK_A(40));
-        cv_circle(c, x, cy, 6.5f, RGBA8(232, 224, 210, 120));
-        cv_circle(c, x - 1.5f, cy - 1.5f, 2.5f, WHITE_A(70));
+        float ys[2] = { cy, cy };
+        int n = 1;
+        if (MARK[k] == 12) { ys[0] = (gtr_string_y(1) + gtr_string_y(2)) * 0.5f - oy; ys[1] = (gtr_string_y(3) + gtr_string_y(4)) * 0.5f - oy; n = 2; }
+        for (int j = 0; j < n; j++) {
+            cv_circle(c, x, ys[j] + 1.5f, 6.5f, DARK_A(40));
+            cv_circle(c, x, ys[j], 6.5f, RGBA8(232, 224, 210, 120));
+            cv_circle(c, x - 1.5f, ys[j] - 1.5f, 2.5f, WHITE_A(70));
+        }
     }
+    /* полоска позиций под грифом: утопленная, с перегородками точно под ладами и ячейкой AUTO */
+    SdfRRect ps = { GT_NUT_X0 - 4 - ox, GT_POS_Y0 - oy, GT_AUTO_X1 - GT_NUT_X0 + 4, GT_POS_Y1 - GT_POS_Y0, 9 };
+    Box bps = { ps.x, ps.y, ps.x + ps.w, ps.y + ps.h };
+    engrave(c, sdf_rrect, &ps, bps, RGBA8(46, 68, 90, 255), RGBA8(56, 80, 102, 255), 1);
+    for (int f = 1; f <= GT_FRETS; f++) {
+        float x = gtr_fret_x(f) - ox;
+        cv_rect(c, (int)x, GT_POS_Y0 + 5 - oy, 1, GT_POS_Y1 - GT_POS_Y0 - 10, RGBA8(120, 144, 166, f <= GT_POS_MAX ? 150 : 70));
+    }
+    cv_rect(c, GT_AUTO_X0 - 4 - ox, GT_POS_Y0 + 4 - oy, 2, GT_POS_Y1 - GT_POS_Y0 - 8, RGBA8(140, 162, 182, 160));
     /* порожек */
     SdfRRect nut = { GT_NUT_X0 - ox, GT_TOP - 4 - oy, GT_NUT_X1 - GT_NUT_X0, GT_BOTTOM - GT_TOP + 8, 4 };
     Box bn = { nut.x, nut.y, nut.x + nut.w, nut.y + nut.h };
@@ -906,13 +920,38 @@ static void draw_guitar(void) {
         vita2d_draw_texture_part(g_tex_gplate[1], GT_STR_X0 - 2, y - h, GT_STR_X0 - 2 - PLATE_X, y - h - PLATE_Y,
                                  GT_STR_X1 - GT_STR_X0 + 4, 2.0f * h);
     }
+    /* где стоит рука: светлая полоса над ладами аккорда */
+    int lo = 99, hi = 0;
+    for (int i = 0; i < N_GSTR; i++) if (g_gch.fret[i] > 0) { if (g_gch.fret[i] < lo) lo = g_gch.fret[i]; if (g_gch.fret[i] > hi) hi = g_gch.fret[i]; }
+    if (g_st.gpos > 0 && g_st.chord_on) { lo = g_st.gpos; if (hi < lo + 3) hi = lo + 3; }
+    else if (lo < 99) { if (hi < lo + 3) hi = lo + 3; if (hi > GT_FRETS) hi = GT_FRETS; }
+    if (lo < 99 && g_st.chord_on)
+        vita2d_draw_rectangle(gtr_fret_x(lo - 1) + 2.0f, GT_TOP + 4, gtr_fret_x(hi) - gtr_fret_x(lo - 1) - 3.0f,
+                              GT_BOTTOM - GT_TOP - 8, RGBA8(236, 226, 206, 26));
     draw_fluid();
+    /* полоска позиций: номера ладов, выбранная позиция - оранжевым, рука аккорда - подсвечена */
+    {
+        char nb[4];
+        float cy = (GT_POS_Y0 + GT_POS_Y1) * 0.5f;
+        for (int p = 1; p <= GT_POS_MAX; p++) {
+            float x0 = gtr_fret_x(p - 1) + 2.0f, x1 = gtr_fret_x(p) - 1.0f;
+            int sel = g_st.gpos == p, in_hand = g_st.chord_on && lo < 99 && p >= lo && p <= hi;
+            if (sel) vita2d_draw_rectangle(x0, GT_POS_Y0 + 4, x1 - x0, GT_POS_Y1 - GT_POS_Y0 - 8, C_ORANGE);
+            else if (in_hand) vita2d_draw_rectangle(x0, GT_POS_Y0 + 4, x1 - x0, GT_POS_Y1 - GT_POS_Y0 - 8, RGBA8(236, 226, 206, 40));
+            snprintf(nb, sizeof(nb), "%d", p);
+            text_c((x0 + x1) * 0.5f, cy - 1.0f, sel ? C_LCD_TEXT : (in_hand ? C_LCD_TEXT : C_LCD_DIM), 0.7f, nb, sel);
+        }
+        int asel = g_st.gpos == 0;
+        if (asel) vita2d_draw_rectangle(GT_AUTO_X0, GT_POS_Y0 + 4, GT_AUTO_X1 - GT_AUTO_X0 - 6, GT_POS_Y1 - GT_POS_Y0 - 8, C_ORANGE);
+        text_c((GT_AUTO_X0 + GT_AUTO_X1 - 6) * 0.5f, cy - 1.0f, asel ? C_LCD_TEXT : C_LCD_DIM, 0.62f, "AUTO", 1);
+    }
     /* баррэ: одним пальцем зажаты несколько струн на нижнем ладу аккорда - рисуем полоску */
     int mn = 99, first = -1, last = -1, cnt = 0;
     for (int i = 0; i < N_GSTR; i++) if (g_gch.fret[i] > 0 && g_gch.fret[i] < mn) mn = g_gch.fret[i];
     for (int i = 0; i < N_GSTR; i++) if (g_gch.fret[i] == mn) { cnt++; if (first < 0) first = i; last = i; }
     if (mn < 99 && cnt >= 2 && last - first >= 2) {
-        float bx = (gtr_fret_x(mn - 1) + gtr_fret_x(mn)) * 0.5f, y0 = gtr_string_y(first), y1 = gtr_string_y(last);
+        float bx = (gtr_fret_x(mn - 1) + gtr_fret_x(mn)) * 0.5f;
+        float y0 = fminf(gtr_string_y(first), gtr_string_y(last)), y1 = fmaxf(gtr_string_y(first), gtr_string_y(last));
         vita2d_draw_rectangle(bx - 5.0f, y0, 10.0f, y1 - y0, RGBA8(226, 104, 36, 210));
         vita2d_draw_rectangle(bx - 2.0f, y0, 2.5f, y1 - y0, RGBA8(250, 168, 92, 200));
     }
@@ -1035,9 +1074,13 @@ static void draw_header(const UiDebug *dbg) {
     } else {
         text_at(LCD_X + 42, LCD_Y + 35, C_LCD_DIM, 0.9f, is_guitar() ? "open" : "chromatic", 0);
     }
-    if (is_guitar()) {
-        guitar_shape_str(&g_gch, buf, sizeof(buf));
-        text_at(LCD_X + LCD_W - 18 - text_w(0.7f, buf), LCD_Y + 35, C_LCD_TEXT, 0.7f, buf, 1);
+    if (is_guitar()) {                               /* аппликатура: по струне в своей колонке, от толстой */
+        for (int i = 0; i < N_GSTR; i++) {
+            int f = g_gch.fret[i];
+            if (f < 0) snprintf(buf, sizeof(buf), "x");
+            else snprintf(buf, sizeof(buf), "%d", f);
+            text_c(LCD_X + LCD_W - 108 + 17.0f * (float)i, LCD_Y + 30, f < 0 ? C_LCD_DIM : C_LCD_TEXT, 0.68f, buf, 1);
+        }
     } else if (g_st.chord_on) {
         const char *ln = type_long(chord_type(g_st.minor, g_st.mod));
         text_at(LCD_X + LCD_W - 18 - text_w(0.62f, ln), LCD_Y + 35, C_LCD_DIM, 0.62f, ln, 0);
@@ -1100,7 +1143,7 @@ void ui_set_state(const AppState *s, const StringMap *m) {
         fluid_clear_textures();
     }
     if (is_guitar())
-        guitar_voicing(&g_gch, g_st.chord_on, g_st.root, chord_type(g_st.minor, g_st.mod), 12 * g_st.octave);
+        guitar_voicing(&g_gch, g_st.chord_on, g_st.root, chord_type(g_st.minor, g_st.mod), 12 * g_st.octave, g_st.gpos);
 }
 
 void ui_set_held(const int *kinds, const int *indices, int n) {
@@ -1152,6 +1195,13 @@ int ui_hit(float x, float y, int *index) {
         float qx, qy;
         quick_pos(k, &qx, &qy);
         if (fabsf(x - qx) <= QS_W * 0.5f + 1.0f && fabsf(y - qy) <= QS_H * 0.5f + 1.0f) { *index = k; return HIT_QUICK; }
+    }
+    /* гитара: полоска позиций под грифом */
+    if (is_guitar() && y >= GT_POS_Y0 - 4 && y <= GT_POS_Y1 + 6 && x >= GT_NUT_X0 - 6 && x <= GT_AUTO_X1 + 6) {
+        *index = -1;
+        if (x >= GT_AUTO_X0 - 4) *index = 0;
+        else for (int p = 1; p <= GT_POS_MAX; p++) if (x < gtr_fret_x(p)) { *index = p; break; }
+        return HIT_GPOS;
     }
     /* струны */
     SdfCarved pl = plate_shape();

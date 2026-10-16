@@ -71,8 +71,10 @@ typedef struct {
     int fret[N_GSTR];                     /* лад, 0 - открытая, -1 - заглушена */
     int note[N_GSTR];                     /* звучащая нота (MIDI), -1 - заглушена */
 } GuitarChord;
-/* аппликатура аккорда; без аккорда - открытые струны. shift - сдвиг в полутонах (октава) */
-void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift);
+/* аппликатура аккорда; без аккорда - открытые струны. shift - сдвиг в полутонах (октава).
+ * pos = 0 - лучшая позиция (как сыграл бы гитарист), 1..GT_POS_MAX - рука с этого лада */
+#define GT_POS_MAX 9
+void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift, int pos);
 /* "x 3 2 0 1 0" */
 void guitar_shape_str(const GuitarChord *g, char *out, size_t cap);
 

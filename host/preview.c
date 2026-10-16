@@ -9,7 +9,7 @@
 extern const char *host_frame_name;
 
 static StringMap g_m, g_gm;
-static int g_key_on, g_key_root, g_key_minor, g_palm;
+static int g_key_on, g_key_root, g_key_minor, g_palm, g_gpos;
 static int g_mode;
 static void on_hit(int zone, float frac, void *u) { (void)zone; (void)frac; (void)u; }
 
@@ -26,7 +26,7 @@ static void set_state(int mode, int chord_on, int root, int minor, int mod, int 
     memset(&s, 0, sizeof(s));
     s.mode = mode; s.chord_on = chord_on; s.root = root; s.minor = minor; s.mod = mod; s.octave = octave;
     s.vol_strings = 70; s.vol_pad = 45;
-    s.key_on = g_key_on; s.key_root = g_key_root; s.key_minor = g_key_minor; s.palm = g_palm;
+    s.key_on = g_key_on; s.key_root = g_key_root; s.key_minor = g_key_minor; s.palm = g_palm; s.gpos = g_gpos;
     fill_quick(&s);
     g_mode = mode;
     stringmap_build(&g_m, chord_on, root, chord_type(minor, mod), STRING_BASE_NOTE + 12 * octave);
@@ -90,12 +90,12 @@ static void path_key(int fr, float *x, float *y) { (void)fr; *x = 596.0f; *y = 3
 /* палец лежит на струне и медленно ведёт вдоль неё */
 static void path_hold(int fr, float *x, float *y) { *x = 700.0f + 6.0f * (float)fr; *y = 250.0f; }
 
-/* гитара: удар вниз по всем струнам (сверху вниз) */
+/* гитара: удар вниз - от толстой струны (внизу) к тонкой */
 static void path_gdown(int fr, float *x, float *y) {
     float t = (float)fr / 10.0f;
     if (t > 1.0f) t = 1.0f;
-    *x = 880.0f - 40.0f * t;
-    *y = 84.0f + 430.0f * t;
+    *x = 900.0f - 40.0f * t;
+    *y = 478.0f - 400.0f * t;                     /* снизу вверх: от толстой к тонкой */
 }
 
 int main(void) {
@@ -134,6 +134,10 @@ int main(void) {
     shot("screen_guitar_G", 0, 0);
     set_state(MODE_GUITAR, 1, 5, 0, 0, 0);
     shot("screen_guitar_F", HIT_ROOT, 5);
+    g_gpos = 8;                                       /* C в 8-й позиции (баррэ) */
+    set_state(MODE_GUITAR, 1, 0, 0, 0, 0);
+    shot("screen_guitar_C_pos8", 0, 0);
+    g_gpos = 0;
     set_state(MODE_GUITAR, 0, 0, 0, 0, 0);
     shot("screen_guitar_open", 0, 0);
     set_state(MODE_GUITAR, 1, 9, 1, 1, 0);

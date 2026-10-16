@@ -18,7 +18,7 @@ float key_center_y(int i);               /* центр клавиши слева
 /* белая клавиша: передняя часть [y0, y1], задняя (между чёрными) [b0, b1] */
 void  white_key_extents(int i, float *y0, float *y1, float *b0, float *b1);
 
-/* ---- гитара: 6 струн, 0 - самая толстая, сверху ---- */
+/* ---- гитара: 6 струн, 0 - самая толстая, внизу ---- */
 float gtr_pitch(void);
 float gtr_string_y(int i);
 float gtr_thick(int i);                  /* толщина струны на экране */

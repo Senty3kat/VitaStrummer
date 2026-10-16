@@ -21,6 +21,7 @@ typedef struct {
     int key_root;    /* тоника тональности 0..11 */
     int key_minor;   /* 0 мажор, 1 натуральный минор */
     int palm;        /* ладонь на струнах (задняя панель) */
+    int gpos;        /* гитара: позиция руки на грифе, 0 - авто, 1..GT_POS_MAX - с этого лада */
 } AppState;
 
 typedef struct {
@@ -29,7 +30,7 @@ typedef struct {
     int show;        /* показывать отладку */
 } UiDebug;
 
-enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY };
+enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS };
 
 /* код быстрого аккорда (0 - пусто) */
 static inline int quick_code(int root, int minor, int mod) { return 1 + root + 12 * minor + 24 * mod; }
@@ -44,7 +45,8 @@ void ui_set_state(const AppState *s, const StringMap *m);
  * down = 1 в первый кадр касания. Задетые струны загораются, по ним растекается цвет */
 void ui_touch_glow(float x0, float y0, float x1, float y1, int down);
 /* index: тоника (высота 0..11), модификатор, качество (0 мажор / 1 минор), режим, шаг октавы (-1 / +1),
- * громкость 0..100 (HIT_VOL) или номер быстрого аккорда (HIT_QUICK); HIT_KEY - касание табло */
+ * громкость 0..100 (HIT_VOL) или номер быстрого аккорда (HIT_QUICK); HIT_KEY - касание табло;
+ * HIT_GPOS - полоска позиций под грифом: 0 авто, 1..GT_POS_MAX лад */
 int  ui_hit(float x, float y, int *index);
 /* какие кнопки сейчас зажаты пальцами (для "нажатого" вида) */
 void ui_set_held(const int *kinds, const int *indices, int n);

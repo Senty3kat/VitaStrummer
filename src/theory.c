@@ -144,19 +144,36 @@ static int tone_weight(int interval) {
  * струны), на каждой струне - звук аккорда или глушение (глушить можно только басовые, подряд).
  * Оценка: все звуки аккорда на месте, в басу тоника (или квинта), больше звучащих струн,
  * ниже по грифу, хватает четырёх пальцев (баррэ считается одним пальцем). */
-void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift) {
+static void voicing_search(GuitarChord *g, int chord_on, int root, int t, int shift, int pos, int *found);
+
+void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift, int pos) {
+    int found = 0;
+    /* в выбранной позиции не вышло - ближайшие соседние, потом лучшая */
+    static const int NEAR[7] = { 0, 1, -1, 2, -2, 3, -3 };
+    for (int k = 0; pos > 0 && k < 7 && !found; k++) {
+        int p = pos + NEAR[k];
+        if (p >= 1 && p <= GT_POS_MAX) voicing_search(g, chord_on, root, t, shift, p, &found);
+    }
+    if (!found) voicing_search(g, chord_on, root, t, shift, 0, &found);
+}
+
+/* pos = 0 - лучшая позиция; pos > 0 - рука стоит с лада pos: зажатые лады только pos..pos+3 */
+static void voicing_search(GuitarChord *g, int chord_on, int root, int t, int shift, int pos, int *found) {
     if (!chord_on) {                            /* без аккорда - открытые струны */
         for (int s = 0; s < N_GSTR; s++) { g->fret[s] = 0; g->note[s] = GT_TUNING[s] + shift; }
+        *found = 1;
         return;
     }
     int iv[MAX_CHORD], n = chord_intervals(t, iv), mask = chord_mask(root, t);
     int best[N_GSTR] = { 0 }, have = 0;
     float best_score = -1e9f;
-    for (int f0 = 1; f0 <= 6; f0++) {
+    int fa = pos > 0 ? pos : 1, fb = pos > 0 ? pos : 6;
+    for (int f0 = fa; f0 <= fb; f0++) {
         int opt[N_GSTR][6], nopt[N_GSTR];
         for (int s = 0; s < N_GSTR; s++) {
             nopt[s] = 0;
-            if (mask & (1 << (GT_TUNING[s] % 12))) opt[s][nopt[s]++] = 0;
+            /* открытые струны - в авто и в первых позициях; выше по грифу форма закрытая */
+            if ((pos == 0 || pos < 3) && (mask & (1 << (GT_TUNING[s] % 12)))) opt[s][nopt[s]++] = 0;
             for (int f = f0; f < f0 + 4; f++)
                 if (mask & (1 << ((GT_TUNING[s] + f) % 12))) opt[s][nopt[s]++] = f;
             if (s < 2) opt[s][nopt[s]++] = -1;  /* две басовые можно заглушить */
@@ -180,6 +197,7 @@ void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift) {
                     if (fr[s] == mn) { at_min++; if (lo < 0) lo = s; hi = s; }
                 int fingers = (at_min >= 2) ? nfret - at_min + 1 : nfret;
                 if (nfret && mx - mn > 3) ok = 0;
+                if (pos > 0 && nfret && mn < pos) ok = 0;
                 if (fingers > 4) ok = 0;
                 if (at_min >= 2 && nfret > 4)                           /* под баррэ не бывает открытых */
                     for (int s = lo; s <= hi; s++) if (fr[s] == 0) ok = 0;
@@ -211,17 +229,22 @@ void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift) {
             if (s == N_GSTR) break;
         }
     }
+    *found = have;
+    if (!have) return;
     for (int s = 0; s < N_GSTR; s++) {
-        g->fret[s] = have ? best[s] : 0;
+        g->fret[s] = best[s];
         g->note[s] = g->fret[s] >= 0 ? GT_TUNING[s] + g->fret[s] + shift : -1;
     }
 }
 
 void guitar_shape_str(const GuitarChord *g, char *out, size_t cap) {
     size_t k = 0;
-    for (int s = 0; s < N_GSTR && k + 2 < cap; s++) {
+    for (int s = 0; s < N_GSTR && k + 4 < cap; s++) {
         if (s) out[k++] = ' ';
-        out[k++] = g->fret[s] < 0 ? 'x' : (char)('0' + (g->fret[s] > 9 ? 9 : g->fret[s]));
+        int f = g->fret[s];
+        if (f < 0) out[k++] = 'x';
+        else if (f >= 10) { out[k++] = (char)('0' + f / 10); out[k++] = (char)('0' + f % 10); }
+        else out[k++] = (char)('0' + f);
     }
     out[k] = 0;
 }
