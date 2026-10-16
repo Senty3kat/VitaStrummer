@@ -55,6 +55,15 @@ typedef struct {
 /* base - нота нижней струны (всегда C, сдвиг по октавам) */
 void stringmap_build(StringMap *m, int chord_on, int root, int t, int base);
 
+/* ---------- тональность ----------
+ * мажор и натуральный минор: ступени, их аккорды (мажор / минор / уменьшённый), римские цифры */
+int key_scale_mask(int key_root, int key_minor);
+int key_degree(int key_root, int key_minor, int pc);          /* 0..6, -1 - не из лада */
+int key_degree_quality(int key_minor, int deg);               /* 0 мажор, 1 минор, 2 уменьшённый */
+const char *key_degree_name(int key_minor, int deg);          /* "I", "ii", "vii" ... */
+/* без аккорда в тональности: струны идут по звукам лада, по одной */
+void stringmap_build_scale(StringMap *m, int mask, int base);
+
 /* ---------- гитара ---------- */
 #define N_GSTR 6
 extern const int GT_TUNING[N_GSTR];       /* MIDI открытых струн, 0 - самая толстая (E2) */

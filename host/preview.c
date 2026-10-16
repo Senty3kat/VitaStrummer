@@ -9,6 +9,7 @@
 extern const char *host_frame_name;
 
 static StringMap g_m, g_gm;
+static int g_key_on, g_key_root, g_key_minor, g_palm;
 static int g_mode;
 static void on_hit(int zone, float frac, void *u) { (void)zone; (void)frac; (void)u; }
 
@@ -25,6 +26,7 @@ static void set_state(int mode, int chord_on, int root, int minor, int mod, int 
     memset(&s, 0, sizeof(s));
     s.mode = mode; s.chord_on = chord_on; s.root = root; s.minor = minor; s.mod = mod; s.octave = octave;
     s.vol_strings = 70; s.vol_pad = 45;
+    s.key_on = g_key_on; s.key_root = g_key_root; s.key_minor = g_key_minor; s.palm = g_palm;
     fill_quick(&s);
     g_mode = mode;
     stringmap_build(&g_m, chord_on, root, chord_type(minor, mod), STRING_BASE_NOTE + 12 * octave);
@@ -117,6 +119,15 @@ int main(void) {
     run("keys", path_key, 2, 45);
     set_state(MODE_STRUM, 0, 0, 0, 0, 0);
     run("hold", path_hold, 30, 55);
+
+    /* тональность до мажор, выбран Am (vi); ладонь на струнах */
+    g_key_on = 1; g_key_root = 0; g_key_minor = 0; g_palm = 1;
+    set_state(MODE_STRUM, 1, 9, 1, 0, 0);
+    shot("screen_key_C_Am", 0, 0);
+    g_key_root = 9; g_key_minor = 1; g_palm = 0;      /* ля минор, гитара, аккорд G (VII) */
+    set_state(MODE_GUITAR, 1, 7, 0, 0, 0);
+    shot("screen_key_Am_guitar", 0, 0);
+    g_key_on = 0;
 
     /* гитара: G (открытая позиция), F (баррэ), Am7, без аккорда; проведение вниз по струнам */
     set_state(MODE_GUITAR, 1, 7, 0, 0, 0);

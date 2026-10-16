@@ -67,11 +67,19 @@ static vita2d_texture *g_tex_plate[PL_N];
 /* "жидкая" подсветка рисуется в полном разрешении в свою текстуру поверх фона.
  * Три текстуры по кругу - процессор пишет в ту, которую GPU уже не читает. */
 #define N_FLUID_TEX 3
-static Canvas g_cv_fluid;
 static vita2d_texture *g_tex_fluid[N_FLUID_TEX];
 static int g_fluid_next = 0;
+static unsigned char g_tex_lit[N_FLUID_TEX][N_STRINGS];   /* какие струны записаны в текстуру */
 /* пиксели каждой струны (клавиша + нить + полоса): индекс в панели и покрытие 0..255 */
-typedef struct { uint32_t idx; uint8_t cov; } StrPix;
+/* пиксель струны: координаты в панели, покрытие (сглаживание края), клетка поля и доля до следующей
+ * (считаются один раз при запуске - в кадре только целочисленная арифметика) */
+typedef struct { uint16_t x, y, cell; uint8_t cov, frac; } StrPix;
+/* поле "жидкости" считается по клеткам вдоль x (путь струны идёт слева направо) */
+#define FL_X0 ((float)BK_X0 - 4.0f)
+#define FL_X1 ((float)BAR_X1 + 4.0f)
+#define FL_CELL 4.0f
+#define FL_NC ((BAR_X1 - BK_X0 + 8) / 4 + 2)       /* клеток по 4 пикселя */
+
 static StrPix *g_spix[N_STRINGS];
 static int g_spix_n[N_STRINGS];
 static Sprite g_root_spr[N_ROOTS][2], g_mod_spr[N_MODS][ST_N], g_qual_spr[2][ST_N], g_led[2];
@@ -412,7 +420,18 @@ static int build_pixels(int n, StrPaintFn paint, StrRangeFn range, StrPix **out,
         out_n[i] = 0;
     }
     for (int k = 0; k < PLATE_W * PLATE_H; k++)
-        if (own[k] >= 0) { StrPix *p = &out[own[k]][out_n[own[k]]++]; p->idx = (uint32_t)k; p->cov = own_cov[k]; }
+        if (own[k] >= 0) {
+            StrPix *p = &out[own[k]][out_n[own[k]]++];
+            int x = k % PLATE_W, y = k / PLATE_W;
+            float fx = ((float)x + PLATE_X + 0.5f - FL_X0) / FL_CELL;
+            int c = (int)fx;
+            if (c < 0) c = 0;
+            if (c > FL_NC - 2) c = FL_NC - 2;
+            float fr = (fx - (float)c) * 256.0f;
+            p->x = (uint16_t)x; p->y = (uint16_t)y; p->cell = (uint16_t)c;
+            p->frac = (uint8_t)(fr < 0.0f ? 0 : (fr > 255.0f ? 255 : fr));
+            p->cov = own_cov[k];
+        }
     free(mask.px);
     free(own);
     free(own_cov);
@@ -548,7 +567,6 @@ static int build_all(void) {
 
     paint_strings(&g_cv_bg, 0, 0, &PS_NORMAL);
     if (!build_pixels(N_STRINGS, harp_mask_paint, harp_range, g_spix, g_spix_n)) return 0;
-    if (!canvas_alloc(&g_cv_fluid, PLATE_W, PLATE_H)) return 0;
 
     /* "горящая" панель: копия фона в границах панели + струны оранжевым */
     for (int v = PL_LIT; v < PL_N; v++) {
@@ -599,6 +617,8 @@ static void free_textures(void) {
     for (int k = 0; k < 3; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
 }
 
+static void fluid_clear_textures(void);
+
 static void create_textures(void) {
     g_tex_bg = tex_from(&g_cv_bg);
     for (int v = PL_LIT; v < PL_N; v++) g_tex_plate[v] = tex_from(&g_cv_plate[v]);
@@ -606,6 +626,7 @@ static void create_textures(void) {
     for (int i = 0; i < N_MODS; i++) for (int k = 0; k < ST_N; k++) g_mod_spr[i][k].tex = tex_from(&g_mod_spr[i][k].cv);
     for (int q = 0; q < 2; q++) for (int k = 0; k < ST_N; k++) g_qual_spr[q][k].tex = tex_from(&g_qual_spr[q][k].cv);
     for (int k = 0; k < N_FLUID_TEX; k++) g_tex_fluid[k] = vita2d_create_empty_texture(PLATE_W, PLATE_H);
+    fluid_clear_textures();
     for (int k = 0; k < 2; k++) g_led[k].tex = tex_from(&g_led[k].cv);
     for (int v = 0; v < 2; v++) g_tex_gplate[v] = tex_from(&g_cv_gplate[v]);
     g_knob.tex = tex_from(&g_knob.cv);
@@ -661,10 +682,6 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
  * красный, оранжевый, янтарь, бледно-жёлтый, на самом фронте - голубой, в самом густом месте - синий.
  * Поле - по клеткам FL_CELL пикселей вдоль x (путь струны идёт слева направо), между
  * клетками плавно; рисуется в полном разрешении точно по пикселям своей струны. */
-#define FL_X0 ((float)BK_X0 - 4.0f)
-#define FL_X1 ((float)BAR_X1 + 4.0f)
-#define FL_CELL 4.0f
-#define FL_NC ((BAR_X1 - BK_X0 + 8) / 4 + 2)       /* клеток по 4 пикселя */
 #define MAX_DROPS 200
 /* разлёт: начальная скорость капель и её затухание - от полосы цвет доходит до нитей
  * и края клавиш (около 200 px), от клавиши - до полосы */
@@ -676,7 +693,6 @@ static void draw_plate_part(int v, const float r[4], unsigned alpha) {
 typedef struct { int s; float x, v, w, amt; int feed; } FDrop;
 static FDrop g_fd[MAX_DROPS];
 static int g_nfd = 0;
-static unsigned char g_str_active[N_STRINGS];     /* струна горела в прошлом кадре */
 
 /* палитра по густоте 0..1 и прозрачность (таблицы на 256 значений) */
 #define NPAL 9
@@ -760,27 +776,6 @@ static void fx_update(float dt) {
     g_nfd = n;
 }
 
-/* поле одной струны по клеткам */
-static void fluid_cells(int s, float *cell) {
-    for (int c = 0; c < FL_NC; c++) cell[c] = 0.0f;
-    for (int i = 0; i < g_nfd; i++) {
-        const FDrop *d = &g_fd[i];
-        if (d->s != s) continue;
-        float reach = 2.6f * d->w;
-        int c0 = (int)((d->x - reach - FL_X0) / FL_CELL), c1 = (int)((d->x + reach - FL_X0) / FL_CELL) + 1;
-        if (c0 < 0) c0 = 0;
-        if (c1 > FL_NC) c1 = FL_NC;
-        float inv = 1.0f / d->w;
-        for (int c = c0; c < c1; c++) {
-            float t = (FL_X0 + (float)c * FL_CELL - d->x) * inv;
-            cell[c] += d->amt * expf(-t * t);
-        }
-    }
-    /* мягкое насыщение: слияние капель не "выжигает" цвет */
-    for (int c = 0; c < FL_NC; c++) cell[c] = 1.0f - expf(-1.25f * cell[c]);
-}
-
-/* перерисовать подсветку; 0 - ничего не горит */
 /* струны текущего режима: 25 струн страммера или 6 гитарных */
 static int is_guitar(void) { return g_st.mode == MODE_GUITAR; }
 static int fl_nstr(void) { return is_guitar() ? N_GSTR : N_STRINGS; }
@@ -790,39 +785,94 @@ static const StrPix *fl_pix(int s, int *n) {
     return g_spix[s];
 }
 
-static int fluid_render(void) {
-    static float cell[FL_NC + 1];
-    int any = 0, nstr = fl_nstr();
+/* Быстрый расчёт (Vita без аппаратного деления, медленные expf):
+ *   - гауссиана капли и мягкое насыщение - таблицами;
+ *   - все капли за один проход складываются в клетки своих струн;
+ *   - пиксель: клетка и доля посчитаны заранее, цвет - целочисленная интерполяция и таблица палитры;
+ *   - пишем сразу в текстуру (одна из трёх по кругу) и только пиксели горящих струн; струну, которая
+ *     горела в этой текстуре раньше, а теперь погасла, стираем. Всю панель не копируем. */
+#define GLUT_N 512
+#define GLUT_R 2.6f                                  /* гауссиана считается до 2.6 ширины */
+#define SAT_N 1024
+#define SAT_MAX 4.0f
+static float g_glut[GLUT_N + 2];
+static uint8_t g_sat[SAT_N + 1];
+static float g_acc[N_STRINGS][FL_NC];
+static uint8_t g_cv8[N_STRINGS][FL_NC + 1];
+
+static void fluid_init_tables(void) {
+    for (int i = 0; i <= GLUT_N + 1; i++) {
+        float t = ((float)i / (float)GLUT_N * 2.0f - 1.0f) * GLUT_R;
+        g_glut[i] = expf(-t * t);
+    }
+    for (int i = 0; i <= SAT_N; i++) {
+        float v = 1.0f - expf(-1.25f * (float)i / (float)SAT_N * SAT_MAX);   /* мягкое насыщение */
+        g_sat[i] = (uint8_t)(v * 255.0f + 0.5f);
+    }
+}
+
+/* перерисовать подсветку в следующую текстуру; возвращает её, если что-то горит */
+static vita2d_texture *fluid_render(void) {
+    int nstr = fl_nstr();
+    unsigned char lit[N_STRINGS];
+    memset(lit, 0, sizeof(lit));
+    for (int i = 0; i < g_nfd; i++) lit[g_fd[i].s] = 1;
+    int any = 0;
+    for (int s = 0; s < nstr; s++) if (lit[s]) { any = 1; memset(g_acc[s], 0, sizeof(g_acc[s])); }
+
+    int ti = g_fluid_next;
+    vita2d_texture *t = g_tex_fluid[ti];
+    if (!t) return NULL;
+    int need = any;
+    for (int s = 0; s < nstr && !need; s++) need = g_tex_lit[ti][s];
+    if (!need) return NULL;                          /* текстура чистая и ничего не горит */
+    g_fluid_next = (ti + 1) % N_FLUID_TEX;
+
+    /* капли -> клетки */
+    for (int i = 0; i < g_nfd; i++) {
+        const FDrop *d = &g_fd[i];
+        float *acc = g_acc[d->s];
+        float reach = GLUT_R * d->w;
+        int c0 = (int)((d->x - reach - FL_X0) * (1.0f / FL_CELL)) + 1, c1 = (int)((d->x + reach - FL_X0) * (1.0f / FL_CELL));
+        if (c0 < 0) c0 = 0;
+        if (c1 > FL_NC - 1) c1 = FL_NC - 1;
+        float k = (float)GLUT_N / (2.0f * GLUT_R * d->w);           /* пикселей -> индекс таблицы */
+        float pos = (FL_X0 + (float)c0 * FL_CELL - d->x) * k + (float)GLUT_N * 0.5f, step = FL_CELL * k;
+        for (int c = c0; c <= c1; c++, pos += step) {
+            int gi = (int)pos;
+            if (gi >= 0 && gi <= GLUT_N) acc[c] += d->amt * g_glut[gi];
+        }
+    }
+
+    uint32_t *tex = (uint32_t *)vita2d_texture_get_datap(t);
+    int stride = (int)vita2d_texture_get_stride(t) / 4;
     for (int s = 0; s < nstr; s++) {
         int npx;
         const StrPix *pix = fl_pix(s, &npx);
-        int has = 0;
-        for (int i = 0; i < g_nfd && !has; i++) has = g_fd[i].s == s;
-        if (!has) {
-            if (g_str_active[s]) {                     /* погасла - стираем её пиксели */
-                for (int k = 0; k < npx; k++) g_cv_fluid.px[pix[k].idx] = 0;
-                g_str_active[s] = 0;
+        if (!lit[s]) {
+            if (g_tex_lit[ti][s]) {                  /* погасла - стираем её пиксели в этой текстуре */
+                for (int k = 0; k < npx; k++) tex[pix[k].y * stride + pix[k].x] = 0;
+                g_tex_lit[ti][s] = 0;
             }
             continue;
         }
-        any = 1;
-        g_str_active[s] = 1;
-        fluid_cells(s, cell);
-        cell[FL_NC] = cell[FL_NC - 1];
+        g_tex_lit[ti][s] = 1;
+        uint8_t *cv = g_cv8[s];
+        const float *acc = g_acc[s];
+        for (int c = 0; c < FL_NC; c++) {
+            int si = (int)(acc[c] * ((float)SAT_N / SAT_MAX));
+            cv[c] = g_sat[si > SAT_N ? SAT_N : si];
+        }
+        cv[FL_NC] = cv[FL_NC - 1];
         for (int k = 0; k < npx; k++) {
             const StrPix *p = &pix[k];
-            float fx = ((float)(p->idx % PLATE_W) + PLATE_X + 0.5f - FL_X0) / FL_CELL;
-            int c = (int)fx;
-            if (c < 0) c = 0;
-            if (c >= FL_NC) c = FL_NC - 1;
-            float t = fx - (float)c;
-            float v = cell[c] + (cell[c + 1] - cell[c]) * t;
-            uint32_t col = g_pal_lut[(int)(v * 255.0f)];
-            unsigned a = ((col >> 24) * p->cov) / 255u;
-            g_cv_fluid.px[p->idx] = (col & 0x00FFFFFFu) | (a << 24);
+            int v0 = cv[p->cell], v = v0 + (((int)cv[p->cell + 1] - v0) * p->frac >> 8);
+            uint32_t col = g_pal_lut[v];
+            if (p->cov != 255) col = (col & 0x00FFFFFFu) | ((((col >> 24) * p->cov + 128) >> 8) << 24);
+            tex[p->y * stride + p->x] = col;
         }
     }
-    return any;
+    return any ? t : NULL;
 }
 
 static void plate_span(const float br[4], float a, float b, unsigned alpha) {
@@ -832,11 +882,19 @@ static void plate_span(const float br[4], float a, float b, unsigned alpha) {
 }
 
 static void draw_fluid(void) {
-    if (!fluid_render() || !g_tex_fluid[0]) return;
-    vita2d_texture *t = g_tex_fluid[g_fluid_next];
-    g_fluid_next = (g_fluid_next + 1) % N_FLUID_TEX;
-    upload(t, &g_cv_fluid);
-    vita2d_draw_texture(t, PLATE_X, PLATE_Y);
+    vita2d_texture *t = fluid_render();
+    if (t) vita2d_draw_texture(t, PLATE_X, PLATE_Y);
+}
+
+/* очистить текстуры подсветки целиком (после создания и при смене набора струн) */
+static void fluid_clear_textures(void) {
+    for (int k = 0; k < N_FLUID_TEX; k++) {
+        if (!g_tex_fluid[k]) continue;
+        uint32_t *tex = (uint32_t *)vita2d_texture_get_datap(g_tex_fluid[k]);
+        int stride = (int)vita2d_texture_get_stride(g_tex_fluid[k]) / 4;
+        for (int y = 0; y < PLATE_H; y++) memset(tex + (size_t)y * stride, 0, (size_t)PLATE_W * 4);
+    }
+    memset(g_tex_lit, 0, sizeof(g_tex_lit));
 }
 
 /* гриф: заглушённые струны приглушены, на ладах - точки аппликатуры, у порожка "x" / "o" */
@@ -880,11 +938,17 @@ static void draw_plate(void) {
     draw_fluid();
 }
 
+/* тональность: ступень тоники кнопки или -1 (не из лада / тональность выключена) */
+static int root_degree(int pc) { return g_st.key_on ? key_degree(g_st.key_root, g_st.key_minor, pc) : -1; }
+
 static void draw_wheel(void) {
     for (int i = 0; i < N_ROOTS; i++) {
         int pc = ROOT_ORDER[i];
         int sel = g_st.chord_on && g_st.root == pc;
-        draw_sprite(&g_root_spr[i][sel ? ST_SEL : ST_NORMAL], 0, 0, is_held(HIT_ROOT, pc));
+        const Sprite *sp = &g_root_spr[i][sel ? ST_SEL : ST_NORMAL];
+        if (g_st.key_on && root_degree(pc) < 0 && !sel && sp->tex)      /* не из лада - приглушена */
+            vita2d_draw_texture_tint(sp->tex, sp->x, sp->y, RGBA8(190, 192, 194, 255));
+        else draw_sprite(sp, 0, 0, is_held(HIT_ROOT, pc));
     }
     for (int i = 0; i < N_MODS; i++) {
         int st = ST_NORMAL;
@@ -901,7 +965,17 @@ static void draw_wheel(void) {
         float x, y;
         seg_center(i, N_ROOTS, (ROOT_R0 + ROOT_R1) / 2.0f, &x, &y);
         float d = is_held(HIT_ROOT, ROOT_ORDER[i]) ? 1.5f : 0.0f;
-        text_c(x, y + d, C_NAVY, 1.45f, root_label(ROOT_ORDER[i]), 1);
+        int deg = root_degree(ROOT_ORDER[i]);
+        if (g_st.key_on && deg < 0) { text_c(x, y + d, C_NAVY_SOFT, 1.45f, root_label(ROOT_ORDER[i]), 0); continue; }
+        if (deg < 0) { text_c(x, y + d, C_NAVY, 1.45f, root_label(ROOT_ORDER[i]), 1); continue; }
+        /* в тональности: нота чуть выше, под ней ступень (тоника - оранжевым), у уменьшённой - кружок */
+        text_c(x, y + d - 6.0f, C_NAVY, 1.3f, root_label(ROOT_ORDER[i]), 1);
+        const char *nb = key_degree_name(g_st.key_minor, deg);
+        int sel = g_st.chord_on && g_st.root == ROOT_ORDER[i];
+        uint32_t nc = deg == 0 && !sel ? C_ORANGE : (sel ? C_LCD_TEXT : C_NAVY_SOFT);
+        text_c(x, y + d + 13.0f, nc, 0.72f, nb, 1);
+        if (key_degree_quality(g_st.key_minor, deg) == 2)            /* уменьшённая: маленький кружок, как vii° */
+            text_at(x + (float)text_w(0.72f, nb) * 0.5f + 1.0f, y + d + 13.0f - 2.0f, nc, 0.5f, "o", 1);
     }
     for (int i = 0; i < N_MODS; i++) {
         float x, y;
@@ -948,6 +1022,13 @@ static void draw_header(const UiDebug *dbg) {
     /* табло аккорда; в режиме гитары справа - аппликатура */
     draw_sprite(&g_led[g_st.chord_on], LCD_X + 22, LCD_Y + LCD_H / 2.0f, 0);
     text_spaced(LCD_X + 42, LCD_Y + 13, C_LCD_DIM, 0.48f, 1.5f, "CHORD", 0);
+    if (g_st.key_on) {                               /* тональность - в верхней строке табло */
+        snprintf(buf, sizeof(buf), "KEY %s%s", root_label(g_st.key_root), g_st.key_minor ? "m" : "");
+        text_at(LCD_X + 96, LCD_Y + 14, C_OR_TOP, 0.56f, buf, 1);
+    } else {
+        text_at(LCD_X + 96, LCD_Y + 14, RGBA8(110, 134, 156, 255), 0.5f, "key off", 0);
+    }
+    if (g_st.palm) text_at(LCD_X + LCD_W - 58, LCD_Y + 14, C_OR_TOP, 0.56f, "PALM", 1);
     if (g_st.chord_on) {
         chord_name(buf, sizeof(buf), g_st.root, chord_type(g_st.minor, g_st.mod));
         text_at(LCD_X + 42, LCD_Y + 37, C_LCD_TEXT, 1.3f, buf, 1);
@@ -992,8 +1073,8 @@ static void draw_quick(void) {
 /* ---------- внешний интерфейс ---------- */
 int ui_init(void) {
     g_nfd = 0;
-    memset(g_str_active, 0, sizeof(g_str_active));
     fluid_init_palette();
+    fluid_init_tables();
     memset(&g_st, 0, sizeof(g_st));
     stringmap_build(&g_map, 0, 0, 0, STRING_BASE_NOTE);
     if (!build_all()) return 0;
@@ -1016,8 +1097,7 @@ void ui_set_state(const AppState *s, const StringMap *m) {
     g_map = *m;
     if (is_guitar() != was_guitar) {                 /* сменился набор струн - подсветку с нуля */
         g_nfd = 0;
-        memset(g_str_active, 0, sizeof(g_str_active));
-        if (g_cv_fluid.px) memset(g_cv_fluid.px, 0, (size_t)PLATE_W * PLATE_H * 4);
+        fluid_clear_textures();
     }
     if (is_guitar())
         guitar_voicing(&g_gch, g_st.chord_on, g_st.root, chord_type(g_st.minor, g_st.mod), 12 * g_st.octave);
@@ -1059,6 +1139,8 @@ int ui_hit(float x, float y, int *index) {
         if (x >= OCT_X - 6 && x < OCT_X + OCT_W / 2.0f)     { *index = -1; return HIT_OCT; }
         if (x >= OCT_X + OCT_W / 2.0f && x < OCT_X + OCT_W + 8) { *index = 1; return HIT_OCT; }
     }
+    /* табло: включить / выключить тональность */
+    if (x >= LCD_X && x <= LCD_X + LCD_W && y >= LCD_Y - 4 && y <= LCD_Y + LCD_H + 6) return HIT_KEY;
     /* громкость: вся капсула, значение - по положению пальца на дорожке */
     if (x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
         float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;

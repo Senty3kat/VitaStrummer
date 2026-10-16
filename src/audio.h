@@ -16,6 +16,7 @@ void audio_pad(const int *notes, int n);
 void audio_guitar(int string, int note, int muted, float vel, int delay_samples);
 void audio_guitar_damp(int mask);                 /* заглушить струны по маске */
 void audio_volume(int strings, int pad);          /* 0..100 */
+void audio_palm(int on);                          /* ладонь на струнах (задняя панель) */
 
 /* диагностика для верхней полосы */
 int audio_xruns(void);                    /* сколько раз блок пришёл заметно позже */

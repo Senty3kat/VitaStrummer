@@ -225,3 +225,42 @@ void guitar_shape_str(const GuitarChord *g, char *out, size_t cap) {
     }
     out[k] = 0;
 }
+
+/* ---------- тональность ---------- */
+static const int SCALE_STEPS[2][7] = { { 0, 2, 4, 5, 7, 9, 11 },     /* мажор */
+                                       { 0, 2, 3, 5, 7, 8, 10 } };   /* натуральный минор */
+/* качество аккорда на ступени: 0 мажор, 1 минор, 2 уменьшённый */
+static const int DEG_QUAL[2][7] = { { 0, 1, 1, 0, 0, 1, 2 },
+                                    { 1, 2, 0, 1, 1, 0, 0 } };
+static const char *DEG_NAME[2][7] = { { "I", "ii", "iii", "IV", "V", "vi", "vii" },
+                                      { "i", "ii", "III", "iv", "v", "VI", "VII" } };
+
+int key_scale_mask(int key_root, int key_minor) {
+    int m = 0;
+    for (int i = 0; i < 7; i++) m |= 1 << ((key_root + SCALE_STEPS[key_minor ? 1 : 0][i]) % 12);
+    return m;
+}
+
+int key_degree(int key_root, int key_minor, int pc) {
+    for (int i = 0; i < 7; i++)
+        if ((key_root + SCALE_STEPS[key_minor ? 1 : 0][i]) % 12 == ((pc % 12) + 12) % 12) return i;
+    return -1;
+}
+
+int key_degree_quality(int key_minor, int deg) { return (deg >= 0 && deg < 7) ? DEG_QUAL[key_minor ? 1 : 0][deg] : 0; }
+const char *key_degree_name(int key_minor, int deg) { return (deg >= 0 && deg < 7) ? DEG_NAME[key_minor ? 1 : 0][deg] : ""; }
+
+void stringmap_build_scale(StringMap *m, int mask, int base) {
+    /* каждая струна - следующий звук лада вверх: 25 струн - около трёх с половиной октав */
+    int cur = base;
+    while (!(mask & (1 << (cur % 12)))) cur++;
+    m->nzones = 0;
+    for (int i = 0; i < N_STRINGS; i++) {
+        if (i > 0) cur = next_in_mask(cur, mask);
+        m->note[i] = cur;
+        m->zone_of[i] = i;
+        m->zone_lo[i] = m->zone_hi[i] = i;
+        m->zone_note[i] = cur;
+    }
+    m->nzones = N_STRINGS;
+}

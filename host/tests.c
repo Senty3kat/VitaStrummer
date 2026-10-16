@@ -170,6 +170,41 @@ static void test_guitar(void) {
     for (int s = 0; s < N_GSTR; s++) CHECK(g.fret[s] == 0 && g.note[s] == GT_TUNING[s] + 12);
 }
 
+/* тональность: лад, ступени, качество; струны по ладу; ладонь укорачивает звук */
+static void test_key(void) {
+    CHECK(key_scale_mask(0, 0) == 0xAB5);                         /* до мажор: C D E F G A B */
+    CHECK(key_scale_mask(9, 1) == key_scale_mask(0, 0));          /* ля минор - те же звуки */
+    CHECK(key_degree(0, 0, 2) == 1 && key_degree_quality(0, 1) == 1);   /* ii = Dm */
+    CHECK(key_degree(0, 0, 11) == 6 && key_degree_quality(0, 6) == 2);  /* vii = Bdim */
+    CHECK(key_degree(0, 0, 1) == -1);                              /* C# не из лада */
+    CHECK(key_degree(9, 1, 7) == 6 && key_degree_quality(1, 6) == 0);   /* в ля миноре G - мажор (VII) */
+    CHECK(strcmp(key_degree_name(0, 4), "V") == 0 && strcmp(key_degree_name(1, 0), "i") == 0);
+    StringMap m;
+    stringmap_build_scale(&m, key_scale_mask(7, 0), 60);          /* соль мажор от C4 */
+    CHECK(m.nzones == N_STRINGS);
+    for (int i = 0; i < N_STRINGS; i++) {
+        CHECK(key_scale_mask(7, 0) & (1 << (m.note[i] % 12)));
+        if (i) CHECK(m.note[i] > m.note[i - 1] && m.note[i] - m.note[i - 1] <= 2);
+    }
+    CHECK(m.note[0] == 60 && m.note[24] - m.note[0] >= 40);       /* больше трёх октав */
+
+    /* ладонь: та же струна гаснет заметно быстрее */
+    int16_t b[256];
+    long e_open = 0, e_palm = 0;
+    synth_init();
+    synth_guitar(2, 55, 0, 0.8f);
+    for (int i = 0; i < 80; i++) synth_render(b, 256);
+    for (int i = 0; i < 40; i++) { synth_render(b, 256); for (int k = 0; k < 256; k++) e_open += abs(b[k]); }
+    synth_init();
+    synth_palm(1);
+    synth_guitar(2, 55, 0, 0.8f);
+    for (int i = 0; i < 80; i++) synth_render(b, 256);
+    for (int i = 0; i < 40; i++) { synth_render(b, 256); for (int k = 0; k < 256; k++) e_palm += abs(b[k]); }
+    synth_palm(0);
+    printf("palm: level after 0.4 s %ld vs open %ld\n", e_palm, e_open);
+    CHECK(e_palm * 10 < e_open);
+}
+
 static void wav_write(const char *path, const int16_t *s, int n) {
     FILE *f = fopen(path, "wb");
     if (!f) return;
@@ -240,6 +275,7 @@ int main(void) {
     test_strum();
     test_keys();
     test_guitar();
+    test_key();
     test_guitar_sound();
     test_synth();
     printf(fails ? "\n%d FAILED\n" : "\nall tests passed\n", fails);

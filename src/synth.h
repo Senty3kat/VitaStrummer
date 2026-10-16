@@ -18,12 +18,15 @@ void synth_pad(const int *notes, int n);
 void synth_all_off(void);
 /* громкость слоёв 0..1: струны (страммер и гитара) и пэд */
 void synth_volume(float strings, float pad);
+/* ладонь на струнах (задняя панель): звенящее гаснет, новые щипки короткие и глухие */
+void synth_palm(int on);
 
 /* гитара: щипок струны s (0 - самая толстая) нотой note; note < 0 - заглушенная струна
  * (-нота открытой струны: короткий глухой стук). vel 0..1 - сила удара */
 #define N_GSTR_SYNTH 6
 void synth_guitar(int s, int note, int delay, float vel);
 void synth_guitar_damp(int mask);       /* заглушить струны по маске битов */
+void synth_guitar_damp_tau(int mask, float tau);
 int  synth_guitar_active(void);
 /* следующий блок, моно */
 void synth_render(int16_t *out, int n);

@@ -8,7 +8,7 @@
 #include <psp2/audioout.h>
 
 /* ---------- очередь событий ---------- */
-enum { EV_STRUM = 1, EV_PAD = 2, EV_GUITAR = 3, EV_GDAMP = 4, EV_VOL = 5 };
+enum { EV_STRUM = 1, EV_PAD = 2, EV_GUITAR = 3, EV_GDAMP = 4, EV_VOL = 5, EV_PALM = 6 };
 typedef struct { uint8_t type, n; uint16_t delay; uint8_t notes[8]; } Ev;
 
 #define QSIZE 256                    /* степень двойки */
@@ -70,6 +70,14 @@ void audio_guitar_damp(int mask) {
     q_push(&e);
 }
 
+void audio_palm(int on) {
+    Ev e;
+    memset(&e, 0, sizeof(e));
+    e.type = EV_PALM;
+    e.notes[0] = (uint8_t)(on ? 1 : 0);
+    q_push(&e);
+}
+
 /* громкость 0..100: notes[0] - струны, notes[1] - пэд */
 void audio_volume(int strings, int pad) {
     Ev e;
@@ -112,6 +120,8 @@ static void drain_events(void) {
             synth_guitar(e.notes[0], e.notes[2] ? -note : note, e.delay, (float)e.notes[3] / 255.0f);
         } else if (e.type == EV_GDAMP) {
             synth_guitar_damp(e.notes[0]);
+        } else if (e.type == EV_PALM) {
+            synth_palm(e.notes[0]);
         } else if (e.type == EV_VOL) {
             synth_volume((float)e.notes[0] / 100.0f, (float)e.notes[1] / 100.0f);
         }

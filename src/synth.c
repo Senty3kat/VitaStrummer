@@ -31,6 +31,7 @@ static const float PAD_RELEASE_S = 0.180f;
 
 /* громкость слоёв 0..1 (ручка на экране); 0.7 - уровень по умолчанию */
 static float g_vol_strings = 0.7f, g_vol_pad = 0.7f;
+static int g_palm = 0;                /* ладонь на струнах (задняя панель): звук короткий и глухой */
 #define VOL_SCALE (1.0f / 0.7f)
 
 static float note_hz(int note) { return 440.0f * powf(2.0f, (float)(note - 69) / 12.0f); }
@@ -39,6 +40,7 @@ static float exp_mul(float tau_s) { return expf(-1.0f / (tau_s * (float)SYNTH_RA
 static void guitar_init(void);
 static float guitar_render_sample(void);
 static void guitar_pluck(int s, int note, float vel);
+void synth_guitar_damp_tau(int mask, float tau);
 
 void synth_init(void) {
     memset(v, 0, sizeof(v));
@@ -76,6 +78,7 @@ static void start_strum(int note) {
     t->att_inc = 1.0f / (STRUM_ATTACK_S * (float)SYNTH_RATE);
     /* нижние струны звучат дольше верхних */
     float tau = 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
+    if (g_palm) tau = 0.09f;                 /* приглушено ладонью - короткий щипок */
     t->dec_mul = exp_mul(tau);
     t->gain = STRUM_GAIN;
 }
@@ -114,6 +117,16 @@ void synth_pad(const int *notes, int n) {
         t->rel_mul = exp_mul(PAD_RELEASE_S / 4.0f);
         t->gain = PAD_GAIN;
     }
+}
+
+void synth_palm(int on) {
+    on = on ? 1 : 0;
+    if (on && !g_palm) {                       /* ладонь легла на струны - звенящее быстро гаснет */
+        for (int i = 0; i < SYNTH_VOICES; i++)
+            if (v[i].kind == V_STRUM) v[i].dec_mul = exp_mul(0.06f);
+        synth_guitar_damp_tau(0x3F, 0.07f);
+    }
+    g_palm = on;
 }
 
 void synth_volume(float strings, float pad) {
@@ -224,12 +237,13 @@ static void guitar_pluck(int s, int note, float vel) {
     k->n = n; k->idx = 0; k->last = 0.0f;
     k->ap_c = (1.0f - d) / (1.0f + d); k->ap_x1 = k->ap_y1 = 0.0f;
     float t60 = muted ? 0.05f : p->t60 * (note < 52 ? 1.0f : 52.0f / (float)note);   /* выше - короче */
+    if (g_palm && !muted) t60 = 0.16f + 0.03f * (float)(N_GSTR_SYNTH - 1 - s);     /* palm mute: басы чуть дольше */
     if (t60 < 0.05f) t60 = 0.05f;
     k->g = powf(10.0f, -3.0f / (t60 * hz));
     k->level_mul = powf(10.0f, -3.0f / (t60 * (float)SYNTH_RATE));
 
     /* возбуждение: шум через фильтр (яркость растёт с силой удара) и гребёнка места щипка */
-    float a = p->exc_lp * (0.6f + 0.4f * vel) * (muted ? 0.4f : 1.0f), lp = 0.0f, mean = 0.0f, mx = 0.0f;
+    float a = p->exc_lp * (0.6f + 0.4f * vel) * (muted ? 0.4f : (g_palm ? 0.55f : 1.0f)), lp = 0.0f, mean = 0.0f, mx = 0.0f;
     for (int i = 0; i < n; i++) { lp += a * (rnd() - lp); k->buf[i] = lp; }
     int pk = (int)(p->pick * (float)n);
     if (pk < 1) pk = 1;
@@ -248,11 +262,13 @@ static void guitar_pluck(int s, int note, float vel) {
 }
 
 /* заглушить струны по маске (сменился аккорд - пальцы ушли со струн) */
-void synth_guitar_damp(int mask) {
+void synth_guitar_damp_tau(int mask, float tau) {
     for (int s = 0; s < N_GSTR_SYNTH; s++)
         if (mask & (1 << s))
-            for (int j = 0; j < G_SLOTS; j++) if (gv[s][j].active) gv[s][j].damp = exp_mul(0.05f);
+            for (int j = 0; j < G_SLOTS; j++) if (gv[s][j].active) gv[s][j].damp = exp_mul(tau);
 }
+
+void synth_guitar_damp(int mask) { synth_guitar_damp_tau(mask, 0.05f); }
 
 void synth_guitar(int s, int note, int delay, float vel) {
     if (delay <= 0 || npend >= MAX_PENDING) { guitar_pluck(s, note, vel); return; }
