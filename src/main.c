@@ -290,7 +290,9 @@ static int touch_down_ui(int kind, int idx, float x) {
     case HIT_KEY:    key_toggle(); break;
     case HIT_GPOS:                              /* позиция на грифе; повторное касание - снова авто */
         if (idx < 0) return 1;
-        st.gpos = (idx > 0 && idx == st.gpos) ? 0 : idx;
+        /* у мажора и минора - только привычные формы: касание пустой ячейки берёт ближайшую */
+        if (idx > 0 && st.chord_on) idx = guitar_snap_pos(st.root, chord_type(st.minor, st.mod), idx);
+        st.gpos = (idx > 0 && idx == gch.pos) ? 0 : idx;
         settings_touch();
         break;
     case HIT_MOD:    st.mod = idx; break;
@@ -317,7 +319,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9.1");
+    dbg_log("start v0.9.2");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));

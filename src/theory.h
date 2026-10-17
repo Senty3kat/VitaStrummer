@@ -70,10 +70,20 @@ extern const int GT_TUNING[N_GSTR];       /* MIDI открытых струн, 0
 typedef struct {
     int fret[N_GSTR];                     /* лад, 0 - открытая, -1 - заглушена */
     int note[N_GSTR];                     /* звучащая нота (MIDI), -1 - заглушена */
+    int pos;                              /* позиция, в которой взята (0 - авто без позиции) */
 } GuitarChord;
 /* аппликатура аккорда; без аккорда - открытые струны. shift - сдвиг в полутонах (октава).
- * pos = 0 - лучшая позиция (как сыграл бы гитарист), 1..GT_POS_MAX - рука с этого лада */
-#define GT_POS_MAX 9
+ * pos = 0 - лучшая позиция (как сыграл бы гитарист), 1..GT_POS_MAX - рука с этого лада.
+ * Мажор и минор (трезвучия) - только 2-4 привычные формы с басом на 5-6 струне (открытая,
+ * баррэ от 6-й, баррэ от 5-й, у мажора ещё форма "до" от 5-й); pos - ближайшая из них.
+ * Остальные аккорды - свои формы в каждой позиции 1..GT_POS_CX. */
+#define GT_POS_MAX 11
+#define GT_POS_CX 9
+void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift, int pos);
+/* какие позиции есть у аккорда (по возрастанию), возвращает число; out - до GT_POS_MAX штук */
+int guitar_positions(int root, int t, int *out);
+/* ближайшая доступная позиция к pos (pos > 0) */
+int guitar_snap_pos(int root, int t, int pos);
 void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift, int pos);
 /* "x 3 2 0 1 0" */
 void guitar_shape_str(const GuitarChord *g, char *out, size_t cap);

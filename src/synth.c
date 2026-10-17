@@ -35,7 +35,9 @@ static int g_palm = 0;                /* ладонь на струнах (за�
 static int g_sus = 0;                 /* сустейн (задняя панель под левой рукой): звучит дольше, но гаснет */
 #define SUS_STRUM_MUL 2.6f            /* во сколько раз дольше струны страммера */
 #define SUS_PAD_MUL 5.0f              /* во сколько раз дольше отпускание пэда */
-#define SUS_GTR_MUL 1.9f              /* во сколько раз дольше гитара */
+#define SUS_GTR_MUL 2.6f              /* во сколько раз дольше гитара */
+#define GTR_RING 1.45f                /* общий сустейн гитары (автор просил дольше) */
+#define GTR_OPEN_RING 1.3f            /* открытые струны звенят ещё дольше */
 #define VOL_SCALE (1.0f / 0.7f)
 
 static float note_hz(int note) { return 440.0f * powf(2.0f, (float)(note - 69) / 12.0f); }
@@ -300,7 +302,7 @@ static void guitar_pluck(int s, int note, float vel, int fret) {
     KsVoice *k = &gv[s][gcur[s]];
 
     float hz = note_hz(note) * powf(2.0f, p->cents / 1200.0f);
-    float t60 = muted ? 0.05f : p->t60 * (note < 52 ? 1.0f : 52.0f / (float)note);   /* выше - короче */
+    float t60 = muted ? 0.05f : GTR_RING * p->t60 * (note < 52 ? 1.0f : sqrtf(52.0f / (float)note));   /* выше - короче */
     if (g_palm && !muted) t60 = 0.16f + 0.03f * (float)(N_GSTR_SYNTH - 1 - s);     /* palm mute: басы чуть дольше */
     else if (g_sus && !muted) t60 *= SUS_GTR_MUL;                                    /* сустейн */
     /* Лад: та же нота выше по грифу на толстой струне звучит иначе - струна короче и зажата
@@ -309,13 +311,16 @@ static void guitar_pluck(int s, int note, float vel, int fret) {
     if (fret < 0) fret = 0;
     if (fret > 15) fret = 15;
     float fr = (float)fret;
-    if (!muted && fret > 0) t60 *= 0.82f - 0.022f * fr;
+    if (!muted && fret > 0) t60 *= 0.9f - 0.014f * fr;
+    if (!muted && fret == 0 && !g_palm) t60 *= GTR_OPEN_RING;
     if (t60 < 0.05f) t60 = 0.05f;
-    float damp_c = p->loop_damp + (muted || g_palm ? 0.25f : 0.0f) + 0.022f * fr;
+    /* открытая струна: меньше потерь в петле - богаче обертонами, "глубже" */
+    float damp_c = p->loop_damp + (muted || g_palm ? 0.25f : 0.0f) + 0.022f * fr - (fret == 0 && !muted ? 0.05f : 0.0f);
+    if (damp_c < 0.02f) damp_c = 0.02f;
     if (damp_c > 0.7f) damp_c = 0.7f;
     line_tune(&k->a, hz, damp_c, t60);
     line_tune(&k->b, hz * powf(2.0f, p->beat_cents / 1200.0f), damp_c + 0.04f, t60 * 0.7f);
-    k->mix_b = 0.42f;
+    k->mix_b = fret == 0 && !muted ? 0.5f : 0.42f;     /* открытая - сильнее вторая поляризация: живые биения */
     k->level_mul = powf(10.0f, -3.0f / (t60 * (float)SYNTH_RATE));
 
     /* возбуждение: форма оттянутой струны (вершина в месте щипка) + немного шума,

@@ -245,34 +245,52 @@ static void test_guitar(void) {
                     if (gp.fret[s2] >= 0) CHECK(chord_mask(r, t) & (1 << (gp.note[s2] % 12)));
                 }
             }
-    /* у каждой позиции своя форма: ни одна не повторяет другую */
+    /* у каждой позиции своя форма; у мажора и минора - 1..4 привычные формы с басом на 5-6 струне
+     * (кроме открытых D и Dm), у остальных - 1..9, рука не ниже позиции */
     for (int r = 0; r < 12; r++)
         for (int t = 0; t < N_TYPES; t++) {
-            GuitarChord ps[GT_POS_MAX + 1];
-            for (int q = 1; q <= GT_POS_MAX; q++) guitar_voicing(&ps[q], 1, r, t, 0, q);
-            for (int q = 1; q <= GT_POS_MAX; q++)
-                for (int q2 = q + 1; q2 <= GT_POS_MAX; q2++) {
-                    int same = 1;
-                    for (int s2 = 0; s2 < N_GSTR; s2++) if (ps[q].fret[s2] != ps[q2].fret[s2]) same = 0;
-                    if (same) { printf("FAIL guitar: %d/%d pos %d == pos %d\n", r, t, q, q2); fails++; }
-                }
-            for (int q = 2; q <= GT_POS_MAX; q++) {      /* и рука в позиции: зажатые лады не ниже её */
-                int snd = 0;
+            int pl[GT_POS_MAX], np = guitar_positions(r, t, pl);
+            int triad = t == chord_type(0, 0) || t == chord_type(1, 0);
+            CHECK(np >= 1 && np <= (triad ? 4 : GT_POS_CX));
+            GuitarChord ps[GT_POS_MAX];
+            for (int i = 0; i < np; i++) {
+                guitar_voicing(&ps[i], 1, r, t, 0, pl[i]);
+                CHECK(ps[i].pos == pl[i]);
+                int snd = 0, bass = -1;
                 for (int s2 = 0; s2 < N_GSTR; s2++) {
-                    if (ps[q].fret[s2] >= 0) snd++;
-                    CHECK(ps[q].fret[s2] < 0 || ps[q].fret[s2] >= q);
+                    if (ps[i].fret[s2] >= 0) { snd++; if (bass < 0) bass = s2; }
+                    if (!triad && pl[i] >= 2) CHECK(ps[i].fret[s2] < 0 || ps[i].fret[s2] >= pl[i]);
                 }
-                CHECK(snd >= 3);
+                CHECK(snd >= (triad ? 5 : 3) || (triad && r == 2));
+                if (triad && r != 2) {
+                    CHECK(bass <= 1);
+                    CHECK(((GT_TUNING[bass] + ps[i].fret[bass]) % 12) == r);     /* в басу тоника */
+                }
+                for (int j = 0; j < i; j++) {
+                    int same = 1;
+                    for (int s2 = 0; s2 < N_GSTR; s2++) if (ps[i].fret[s2] != ps[j].fret[s2]) same = 0;
+                    if (same) { printf("FAIL guitar: %d/%d pos %d == pos %d\n", r, t, pl[i], pl[j]); fails++; }
+                }
+            }
+            /* любая позиция - к ближайшей доступной */
+            for (int q = 1; q <= GT_POS_MAX; q++) {
+                GuitarChord gq;
+                guitar_voicing(&gq, 1, r, t, 0, q);
+                if (triad) CHECK(gq.pos == guitar_snap_pos(r, t, q));
             }
         }
-    {   /* фа мажор: 2-я и 3-я позиции разные (замечание автора) */
-        GuitarChord a2, a3;
-        guitar_voicing(&a2, 1, 5, chord_type(0, 0), 0, 2);
-        guitar_voicing(&a3, 1, 5, chord_type(0, 0), 0, 3);
-        char b2[32], b3[32];
-        guitar_shape_str(&a2, b2, sizeof(b2)); guitar_shape_str(&a3, b3, sizeof(b3));
-        printf("F pos2: %s, pos3: %s\n", b2, b3);
-        CHECK(strcmp(b2, b3) != 0);
+    {   /* си-бемоль: первая позиция - баррэ "ля" (замечание автора), вторая - баррэ "ми" */
+        GuitarChord a;
+        char bb[32];
+        guitar_voicing(&a, 1, 10, chord_type(0, 0), 0, 1);
+        guitar_shape_str(&a, bb, sizeof(bb));
+        CHECK(strcmp(bb, "x 1 3 3 3 1") == 0);
+        guitar_voicing(&a, 1, 10, chord_type(0, 0), 0, 0);
+        guitar_shape_str(&a, bb, sizeof(bb));
+        CHECK(strcmp(bb, "x 1 3 3 3 1") == 0);
+        guitar_voicing(&a, 1, 10, chord_type(0, 0), 0, 6);
+        guitar_shape_str(&a, bb, sizeof(bb));
+        CHECK(strcmp(bb, "6 8 8 7 6 6") == 0);
     }
     GuitarChord g;
     guitar_voicing(&g, 0, 0, 0, 12, 0);                  /* без аккорда - открытые струны, со сдвигом */

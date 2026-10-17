@@ -147,12 +147,12 @@ int main(void) {
     g_gpos = 8;                                       /* C в 8-й позиции (баррэ) */
     set_state(MODE_GUITAR, 1, 0, 0, 0, 0);
     shot("screen_guitar_C_pos8", 0, 0);
-    g_gpos = 6;                                       /* C в 6-й позиции: средние струны заглушены */
-    set_state(MODE_GUITAR, 1, 0, 0, 0, 0);
-    shot("screen_guitar_C_pos6", 0, 0);
-    g_gpos = 2;                                       /* F во 2-й и 3-й - разные формы */
-    set_state(MODE_GUITAR, 1, 5, 0, 0, 0);
-    shot("screen_guitar_F_pos2", 0, 0);
+    g_gpos = 6;                                       /* Bb: позиции 1 и 6, выбрана 6 (баррэ от 6-й) */
+    set_state(MODE_GUITAR, 1, 10, 0, 0, 0);
+    shot("screen_guitar_Bb_pos6", 0, 0);
+    g_gpos = 7;                                       /* Am7 - сложный аккорд: позиции 1..9 как раньше */
+    set_state(MODE_GUITAR, 1, 9, 1, 1, 0);
+    shot("screen_guitar_Am7_pos7", 0, 0);
     g_gpos = 0;
     set_state(MODE_GUITAR, 0, 0, 0, 0, 0);
     shot("screen_guitar_open", 0, 0);

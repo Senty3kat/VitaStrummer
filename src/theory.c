@@ -155,15 +155,119 @@ static int same_shape(const GuitarChord *a, const int *fr) {
 /* Позиции: у каждой своя форма. Со 2-го лада указательный палец стоит ровно на ладу позиции.
  * Если на этом ладу нет ни одного звука аккорда - рука всё равно в позиции (лады pos..pos+3),
  * но форма берётся та, которой нет в других позициях. Совсем ничего - ближайшая соседняя, потом лучшая. */
+#define GT_FRETS_MAX 12                   /* на экране 12 ладов */
+
+/* ---- мажор и минор: привычные формы ----
+ * Каждая форма - лады относительно лада тоники на басовой струне (f), -1 - глушить. */
+typedef struct { int bass_str; int open_only; int rel[N_GSTR]; } Shape;
+#define X (-99)
+static const Shape MAJ_SHAPES[] = {
+    { 0, 0, { 0, 2, 2, 1, 0, 0 } },          /* форма "ми", баррэ, тоника на 6-й (f = 0 - открытый E) */
+    { 1, 0, { X, 0, 2, 2, 2, 0 } },          /* форма "ля", баррэ, тоника на 5-й (f = 0 - открытый A) */
+    { 1, 0, { X, 0, -1, -3, -2, -3 } },      /* форма "до", тоника на 5-й (f = 3 - открытый C) */
+    { 0, 1, { 0, -1, -3, -3, -3, 0 } },      /* открытый G: 3 2 0 0 0 3 */
+    { 2, 1, { X, X, 0, 2, 3, 2 } },          /* открытый D: x x 0 2 3 2 (бас на 4-й - так играют все) */
+};
+static const Shape MIN_SHAPES[] = {
+    { 0, 0, { 0, 2, 2, 0, 0, 0 } },          /* форма "ми минор", тоника на 6-й */
+    { 1, 0, { X, 0, 2, 2, 1, 0 } },          /* форма "ля минор", тоника на 5-й */
+    { 2, 1, { X, X, 0, 2, 3, 1 } },          /* открытый Dm */
+};
+#undef X
+
+/* трезвучие: 0 - мажор, 1 - минор, -1 - другой аккорд */
+static int triad_kind(int t) {
+    if (t == chord_type(0, 0)) return 0;
+    if (t == chord_type(1, 0)) return 1;
+    return -1;
+}
+
+/* все привычные формы аккорда: лады и позиция (открытые - позиция 1), по возрастанию позиции */
+static int triad_shapes(int root, int kind, int frets[][N_GSTR], int *pos) {
+    const Shape *sh = kind ? MIN_SHAPES : MAJ_SHAPES;
+    int ns = kind ? (int)(sizeof(MIN_SHAPES) / sizeof(MIN_SHAPES[0])) : (int)(sizeof(MAJ_SHAPES) / sizeof(MAJ_SHAPES[0]));
+    int n = 0;
+    for (int k = 0; k < ns; k++) {
+        int f = ((root - GT_TUNING[sh[k].bass_str]) % 12 + 12) % 12;   /* лад тоники на басовой струне */
+        if (sh[k].open_only && f != 0 && !(sh[k].bass_str == 0 && f == 3)) continue;
+        int fr[N_GSTR], ok = 1, mn = 99, open = 0;
+        for (int s = 0; s < N_GSTR; s++) {
+            if (sh[k].rel[s] <= -50) { fr[s] = -1; continue; }
+            fr[s] = f + sh[k].rel[s];
+            if (fr[s] < 0 || fr[s] > GT_FRETS_MAX) ok = 0;
+            if (fr[s] == 0) open = 1;
+            if (fr[s] > 0 && fr[s] < mn) mn = fr[s];
+        }
+        if (!ok) continue;
+        /* открытые струны - только у открытых форм (у баррэ с f > 0 их нет) */
+        int p = open ? 1 : mn;
+        if (p > GT_POS_MAX) continue;
+        int dup = 0;
+        for (int j = 0; j < n; j++) if (pos[j] == p) dup = 1;
+        if (dup) continue;
+        int at = n;                                       /* вставка по возрастанию позиции */
+        while (at > 0 && pos[at - 1] > p) {
+            pos[at] = pos[at - 1];
+            for (int s = 0; s < N_GSTR; s++) frets[at][s] = frets[at - 1][s];
+            at--;
+        }
+        pos[at] = p;
+        for (int s = 0; s < N_GSTR; s++) frets[at][s] = fr[s];
+        n++;
+    }
+    return n;
+}
+
+int guitar_positions(int root, int t, int *out) {
+    int kind = triad_kind(t);
+    if (kind < 0) {
+        for (int p = 1; p <= GT_POS_CX; p++) out[p - 1] = p;
+        return GT_POS_CX;
+    }
+    int fr[8][N_GSTR];
+    return triad_shapes(root, kind, fr, out);
+}
+
+int guitar_snap_pos(int root, int t, int pos) {
+    int ps[GT_POS_MAX], n = guitar_positions(root, t, ps), best = pos, bd = 99;
+    for (int i = 0; i < n; i++) {
+        int d = ps[i] > pos ? ps[i] - pos : pos - ps[i];
+        if (d < bd) { bd = d; best = ps[i]; }           /* при равенстве - нижняя */
+    }
+    return best;
+}
+
 void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift, int pos) {
     int found = 0;
+    g->pos = 0;
+    int kind = chord_on ? triad_kind(t) : -1;
+    if (kind >= 0) {                                      /* мажор / минор - привычные формы */
+        int fr[8][N_GSTR], ps[8], n = triad_shapes(root, kind, fr, ps);
+        if (n > 0) {
+            int k = 0;                                    /* авто - самая нижняя (открытая, если есть) */
+            if (pos > 0) {
+                int bd = 99;
+                for (int i = 0; i < n; i++) {
+                    int d = ps[i] > pos ? ps[i] - pos : pos - ps[i];
+                    if (d < bd) { bd = d; k = i; }
+                }
+            }
+            for (int s = 0; s < N_GSTR; s++) {
+                g->fret[s] = fr[k][s];
+                g->note[s] = fr[k][s] >= 0 ? GT_TUNING[s] + fr[k][s] + shift : -1;
+            }
+            g->pos = ps[k];
+            return;
+        }
+    }
+    if (pos > GT_POS_CX) pos = GT_POS_CX;
     if (pos >= 1 && chord_on) {
         /* таблица всех позиций: сначала строгие формы, потом остальные позиции по порядку -
          * каждая берёт форму, которой ещё нет в таблице */
-        GuitarChord tab[GT_POS_MAX + 1];
-        int ok[GT_POS_MAX + 1] = { 0 }, nused = 0;
-        GuitarChord used[GT_POS_MAX];
-        for (int q = 1; q <= GT_POS_MAX; q++) {
+        GuitarChord tab[GT_POS_CX + 1];
+        int ok[GT_POS_CX + 1] = { 0 }, nused = 0;
+        GuitarChord used[GT_POS_CX];
+        for (int q = 1; q <= GT_POS_CX; q++) {
             voicing_search(&tab[q], 1, root, t, shift, q, q >= 2, NULL, 0, &ok[q]);
             if (ok[q] && q == 1) {                   /* 1-я позиция: открытая форма или палец на 1-м ладу */
                 int open = 0, mn = 99;
@@ -175,17 +279,17 @@ void guitar_voicing(GuitarChord *g, int chord_on, int root, int t, int shift, in
             }
             if (ok[q]) used[nused++] = tab[q];
         }
-        for (int q = 1; q <= GT_POS_MAX; q++) {
+        for (int q = 1; q <= GT_POS_CX; q++) {
             if (ok[q]) continue;
             voicing_search(&tab[q], 1, root, t, shift, q, 0, used, nused, &ok[q]);
             if (ok[q]) used[nused++] = tab[q];
         }
-        if (ok[pos]) { *g = tab[pos]; return; }
+        if (ok[pos]) { *g = tab[pos]; g->pos = pos; return; }
     }
     static const int NEAR[7] = { 0, 1, -1, 2, -2, 3, -3 };
     for (int k = 0; pos > 0 && k < 7 && !found; k++) {
         int p = pos + NEAR[k];
-        if (p >= 1 && p <= GT_POS_MAX) voicing_search(g, chord_on, root, t, shift, p, 0, NULL, 0, &found);
+        if (p >= 1 && p <= GT_POS_CX) { voicing_search(g, chord_on, root, t, shift, p, 0, NULL, 0, &found); g->pos = p; }
     }
     if (!found) voicing_search(g, chord_on, root, t, shift, 0, 0, NULL, 0, &found);
 }

@@ -554,7 +554,7 @@ static void paint_fretboard(Canvas *c) {
     engrave(c, sdf_rrect, &ps, bps, RGBA8(46, 68, 90, 255), RGBA8(56, 80, 102, 255), 1);
     for (int f = 1; f <= GT_FRETS; f++) {
         float x = gtr_fret_x(f) - ox;
-        cv_rect(c, (int)x, GT_POS_Y0 + 5 - oy, 1, GT_POS_Y1 - GT_POS_Y0 - 10, RGBA8(120, 144, 166, f <= GT_POS_MAX ? 150 : 70));
+        cv_rect(c, (int)x, GT_POS_Y0 + 5 - oy, 1, GT_POS_Y1 - GT_POS_Y0 - 10, RGBA8(120, 144, 166, f <= GT_POS_MAX ? 120 : 70));
     }
     cv_rect(c, GT_AUTO_X0 - 4 - ox, GT_POS_Y0 + 4 - oy, 2, GT_POS_Y1 - GT_POS_Y0 - 8, RGBA8(140, 162, 182, 160));
     /* порожек */
@@ -944,8 +944,8 @@ static void draw_guitar(void) {
     /* где стоит рука: светлая полоса над ладами аккорда */
     int lo = 99, hi = 0;
     for (int i = 0; i < N_GSTR; i++) if (g_gch.fret[i] > 0) { if (g_gch.fret[i] < lo) lo = g_gch.fret[i]; if (g_gch.fret[i] > hi) hi = g_gch.fret[i]; }
-    if (g_st.gpos > 0 && g_st.chord_on) { lo = g_st.gpos; if (hi < lo + 3) hi = lo + 3; }
-    else if (lo < 99) { if (hi < lo + 3) hi = lo + 3; if (hi > GT_FRETS) hi = GT_FRETS; }
+    if (g_gch.pos > 0 && g_st.chord_on && g_gch.pos < lo) lo = g_gch.pos;
+    if (lo < 99) { if (hi < lo + 3) hi = lo + 3; if (hi > GT_FRETS) hi = GT_FRETS; }
     if (lo < 99 && g_st.chord_on)
         vita2d_draw_rectangle(gtr_fret_x(lo - 1) + 2.0f, GT_TOP + 4, gtr_fret_x(hi) - gtr_fret_x(lo - 1) - 3.0f,
                               GT_BOTTOM - GT_TOP - 8, RGBA8(236, 226, 206, 26));
@@ -954,9 +954,14 @@ static void draw_guitar(void) {
     {
         char nb[4];
         float cy = (GT_POS_Y0 + GT_POS_Y1) * 0.5f;
+        /* у мажора и минора номера только у привычных форм, у остальных - 1..9 */
+        int avail[GT_POS_MAX + 1] = { 0 }, ps[GT_POS_MAX];
+        int nps = g_st.chord_on ? guitar_positions(g_st.root, chord_type(g_st.minor, g_st.mod), ps) : 0;
+        for (int i = 0; i < nps; i++) avail[ps[i]] = 1;
         for (int p = 1; p <= GT_POS_MAX; p++) {
+            if (!avail[p]) continue;
             float x0 = gtr_fret_x(p - 1) + 2.0f, x1 = gtr_fret_x(p) - 1.0f;
-            int sel = g_st.gpos == p, in_hand = g_st.chord_on && lo < 99 && p >= lo && p <= hi;
+            int sel = g_st.gpos > 0 && g_gch.pos == p, in_hand = g_st.chord_on && lo < 99 && p >= lo && p <= hi;
             if (sel) vita2d_draw_rectangle(x0, GT_POS_Y0 + 4, x1 - x0, GT_POS_Y1 - GT_POS_Y0 - 8, C_ORANGE);
             else if (in_hand) vita2d_draw_rectangle(x0, GT_POS_Y0 + 4, x1 - x0, GT_POS_Y1 - GT_POS_Y0 - 8, RGBA8(236, 226, 206, 40));
             snprintf(nb, sizeof(nb), "%d", p);

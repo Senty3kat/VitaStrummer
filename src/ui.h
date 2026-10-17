@@ -38,8 +38,8 @@ enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, 
 #define TRANSPOSE_MAX 6
 
 /* код быстрого аккорда (0 - пусто): тоника, качество, модификатор, октава и позиция на грифе.
- * Октава хранится как (oct + 5) % 5, позиция 0..9 (0 - авто): у старых кодов обе получаются 0 */
-#define QUICK_MAX (1080 * 10)
+ * Октава хранится как (oct + 5) % 5, позиция 0..GT_POS_MAX (0 - авто): у старых кодов обе получаются 0 */
+#define QUICK_MAX (1080 * (GT_POS_MAX + 1))
 static inline int quick_code(int root, int minor, int mod, int oct, int gpos) {
     return 1 + root + 12 * minor + 24 * mod + 216 * ((oct + 5) % 5) + 1080 * gpos;
 }
