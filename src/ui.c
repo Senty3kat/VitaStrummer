@@ -839,8 +839,14 @@ static float g_glut[GLUT_N + 2];
 static uint8_t g_sat[SAT_N + 1];
 static float g_acc[N_STRINGS][FL_NC];
 static uint8_t g_cv8[N_STRINGS][FL_NC + 1];
+static uint16_t g_keyfade[FL_NC];            /* 0..256 по клеткам: 0 на клавишах, 256 правее шейки */
 
 static void fluid_init_tables(void) {
+    for (int c = 0; c < FL_NC; c++) {           /* клавиши - шейка: плавно от 0 к 1 */
+        float x = FL_X0 + (float)c * FL_CELL, t = (x - (float)WK_X1) / (float)(NECK_X1 + 10 - WK_X1);
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        g_keyfade[c] = (uint16_t)(256.0f * t * t * (3.0f - 2.0f * t));
+    }
     for (int i = 0; i <= GLUT_N + 1; i++) {
         float t = ((float)i / (float)GLUT_N * 2.0f - 1.0f) * GLUT_R;
         g_glut[i] = expf(-t * t);
@@ -899,9 +905,13 @@ static vita2d_texture *fluid_render(void) {
         g_tex_lit[ti][s] = 1;
         uint8_t *cv = g_cv8[s];
         const float *acc = g_acc[s];
+        /* в аккорде клавиша не из аккорда («округлённая» к нему струна) - жидкость на неё не заходит:
+         * гаснет на шейке клавиши; справа (нити, полосы) - как у всех */
+        int keep_off_keys = !is_guitar() && g_khl_want && !key_lit(s);
         for (int c = 0; c < FL_NC; c++) {
             int si = (int)(acc[c] * ((float)SAT_N / SAT_MAX));
             cv[c] = g_sat[si > SAT_N ? SAT_N : si];
+            if (keep_off_keys) cv[c] = (uint8_t)((cv[c] * g_keyfade[c]) >> 8);
         }
         cv[FL_NC] = cv[FL_NC - 1];
         for (int k = 0; k < npx; k++) {
