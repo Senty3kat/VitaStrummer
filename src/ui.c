@@ -70,6 +70,13 @@ static vita2d_texture *g_tex_plate[PL_N];
 static vita2d_texture *g_tex_fluid[N_FLUID_TEX];
 static int g_fluid_next = 0;
 static unsigned char g_tex_lit[N_FLUID_TEX][N_STRINGS];   /* какие струны записаны в текстуру */
+
+/* Мягкая подсветка клавиш аккорда (Strum / Pad): две текстуры по очереди, процессор пишет их
+ * только при смене аккорда - пиксели клавиш тех струн, чья нота входит в аккорд */
+static vita2d_texture *g_tex_khl[2];
+static int g_khl_strings[2];     /* битовая маска струн, записанных в текстуру */
+static int g_khl_cur = -1;       /* какую показываем (-1 - ничего) */
+static int g_khl_want, g_khl_have = -1;   /* ключ состояния: маска нот | тоника | вкл */
 /* пиксели каждой струны (клавиша + нить + полоса): индекс в панели и покрытие 0..255 */
 /* пиксель струны: координаты в панели, покрытие (сглаживание края), клетка поля и доля до следующей
  * (считаются один раз при запуске - в кадре только целочисленная арифметика) */
@@ -247,12 +254,16 @@ static void paint_bg(Canvas *c) {
     Box bb_cap = { CAP_X, CAP_Y, CAP_X + CAP_W, CAP_Y + CAP_H };
     engrave(c, sdf_rrect, &cap, bb_cap, RGBA8(226, 212, 188, 255), RGBA8(232, 220, 198, 255), 0);
     cv_rect(c, 300, 22, 124, 1, RGBA8(120, 110, 96, 200));                  /* линия после MODE */
-    cv_rect(c, 506, 22, 96, 1, RGBA8(120, 110, 96, 200));                   /* линия после OCTAVE */
+    cv_rect(c, 500, 22, OCT_X + OCT_W - 500, 1, RGBA8(120, 110, 96, 200));  /* линия после OCTAVE */
+    cv_rect(c, 572, 22, TRN_X + TRN_W - 572, 1, RGBA8(120, 110, 96, 200));  /* линия после TRANS */
     cv_rect(c, 438, 18, 1, 32, RGBA8(150, 132, 108, 200));                  /* разделитель */
     cv_rect(c, 439, 18, 1, 32, WHITE_A(160));
     SdfRRect oct = { OCT_X, OCT_Y, OCT_W, OCT_H, OCT_H / 2.0f };
     Box bb_oct = { OCT_X, OCT_Y, OCT_X + OCT_W, OCT_Y + OCT_H };
     bevel(c, sdf_rrect, &oct, bb_oct, &SK_CREAM, 2.0f);
+    SdfRRect trn = { TRN_X, OCT_Y, TRN_W, OCT_H, OCT_H / 2.0f };
+    Box bb_trn = { TRN_X, OCT_Y, TRN_X + TRN_W, OCT_Y + OCT_H };
+    bevel(c, sdf_rrect, &trn, bb_trn, &SK_CREAM, 2.0f);
 
     /* табло аккорда */
     SdfRRect lcd = { LCD_X, LCD_Y, LCD_W, LCD_H, LCD_H / 2.0f };
@@ -623,6 +634,7 @@ static void free_textures(void) {
     for (int i = 0; i < N_MODS; i++)
         for (int k = 0; k < ST_N; k++) { if (g_mod_spr[i][k].tex) vita2d_free_texture(g_mod_spr[i][k].tex); g_mod_spr[i][k].tex = NULL; }
     for (int k = 0; k < N_FLUID_TEX; k++) { if (g_tex_fluid[k]) vita2d_free_texture(g_tex_fluid[k]); g_tex_fluid[k] = NULL; }
+    for (int k = 0; k < 2; k++) { if (g_tex_khl[k]) vita2d_free_texture(g_tex_khl[k]); g_tex_khl[k] = NULL; }
     for (int q = 0; q < 2; q++)
         for (int k = 0; k < ST_N; k++) { if (g_qual_spr[q][k].tex) vita2d_free_texture(g_qual_spr[q][k].tex); g_qual_spr[q][k].tex = NULL; }
     for (int k = 0; k < 2; k++) { if (g_led[k].tex) vita2d_free_texture(g_led[k].tex); g_led[k].tex = NULL; }
@@ -641,6 +653,15 @@ static void create_textures(void) {
     for (int q = 0; q < 2; q++) for (int k = 0; k < ST_N; k++) g_qual_spr[q][k].tex = tex_from(&g_qual_spr[q][k].cv);
     for (int k = 0; k < N_FLUID_TEX; k++) g_tex_fluid[k] = vita2d_create_empty_texture(PLATE_W, PLATE_H);
     fluid_clear_textures();
+    for (int k = 0; k < 2; k++) {
+        g_tex_khl[k] = vita2d_create_empty_texture(PLATE_W, PLATE_H);
+        if (!g_tex_khl[k]) continue;
+        uint32_t *tex = (uint32_t *)vita2d_texture_get_datap(g_tex_khl[k]);
+        int stride = (int)vita2d_texture_get_stride(g_tex_khl[k]) / 4;
+        for (int y = 0; y < PLATE_H; y++) memset(tex + (size_t)y * stride, 0, (size_t)PLATE_W * 4);
+        g_khl_strings[k] = 0;
+    }
+    g_khl_cur = -1; g_khl_have = -1;             /* перерисовать при следующем кадре */
     for (int k = 0; k < 2; k++) g_led[k].tex = tex_from(&g_led[k].cv);
     for (int v = 0; v < 2; v++) g_tex_gplate[v] = tex_from(&g_cv_gplate[v]);
     g_knob.tex = tex_from(&g_knob.cv);
@@ -964,8 +985,48 @@ static void draw_guitar(void) {
     }
 }
 
+/* Подсветка клавиш аккорда: тёплый оттенок, тоника чуть ярче; к нити плавно гаснет.
+ * Нота клавиши - её место на клавиатуре C4..C6, как на настоящем пианино */
+#define KHL_A_TONE 44
+#define KHL_A_ROOT 74
+static void keys_hl_update(void) {
+    if (g_khl_want == g_khl_have) return;
+    g_khl_have = g_khl_want;
+    if (!g_khl_want) { g_khl_cur = -1; return; }
+    int ti = g_khl_cur == 0 ? 1 : 0;              /* пишем в ту, что сейчас не показывается */
+    vita2d_texture *t = g_tex_khl[ti];
+    if (!t) { g_khl_cur = -1; return; }
+    uint32_t *tex = (uint32_t *)vita2d_texture_get_datap(t);
+    int stride = (int)vita2d_texture_get_stride(t) / 4;
+    int mask = g_khl_want & 0xFFF, root = (g_khl_want >> 12) & 15, written = 0;
+    for (int i = 0; i < N_STRINGS; i++) {
+        int pc = (STRING_BASE_NOTE + i) % 12, on = (mask >> pc) & 1;
+        int npx = g_spix_n[i];
+        const StrPix *pix = g_spix[i];
+        if (!on) {
+            if (g_khl_strings[ti] & (1 << i))
+                for (int k = 0; k < npx; k++) tex[pix[k].y * stride + pix[k].x] = 0;
+            continue;
+        }
+        written |= 1 << i;
+        int a0 = pc == root ? KHL_A_ROOT : KHL_A_TONE;
+        for (int k = 0; k < npx; k++) {
+            const StrPix *p = &pix[k];
+            int sx = p->x + PLATE_X, a = a0;
+            if (sx >= NECK_X1) a = 0;
+            else if (sx > WK_X1) a = a0 * (NECK_X1 - sx) / (NECK_X1 - WK_X1);   /* только при смене аккорда */
+            a = a * p->cov / 255;
+            tex[p->y * stride + p->x] = a ? RGBA8(255, 196, 132, a) : 0;
+        }
+    }
+    g_khl_strings[ti] = written;
+    g_khl_cur = ti;
+}
+
 static void draw_plate(void) {
     if (is_guitar()) { draw_guitar(); return; }
+    keys_hl_update();
+    if (g_khl_cur >= 0 && g_tex_khl[g_khl_cur]) vita2d_draw_texture(g_tex_khl[g_khl_cur], PLATE_X, PLATE_Y);
     /* в аккорде слабо горят струны с тоникой */
     if (g_st.chord_on)
         for (int i = 0; i < N_STRINGS; i++) {
@@ -1052,11 +1113,19 @@ static void draw_header(const UiDebug *dbg) {
     /* OCTAVE */
     text_spaced(452, 27, C_NAVY, 0.6f, 1.5f, "OCTAVE", 1);
     float oy = OCT_Y + OCT_H / 2.0f;
-    text_c(OCT_X + 16, oy, is_held(HIT_OCT, -1) ? C_ORANGE : C_NAVY, 0.95f, "<", 1);
-    text_c(OCT_X + OCT_W - 16, oy, is_held(HIT_OCT, 1) ? C_ORANGE : C_NAVY, 0.95f, ">", 1);
+    text_c(OCT_X + 12, oy, is_held(HIT_OCT, -1) ? C_ORANGE : C_NAVY, 0.95f, "<", 1);
+    text_c(OCT_X + OCT_W - 12, oy, is_held(HIT_OCT, 1) ? C_ORANGE : C_NAVY, 0.95f, ">", 1);
     if (g_st.octave > 0) snprintf(buf, sizeof(buf), "+%d", g_st.octave);
     else snprintf(buf, sizeof(buf), "%d", g_st.octave);
     text_c(OCT_X + OCT_W / 2.0f, oy, C_NAVY, 1.0f, buf, 1);
+
+    /* TRANSPOSE (полутоны) */
+    text_spaced(TRN_X, 27, C_NAVY, 0.6f, 1.5f, "TRANS", 1);
+    text_c(TRN_X + 12, oy, is_held(HIT_TRN, -1) ? C_ORANGE : C_NAVY, 0.95f, "<", 1);
+    text_c(TRN_X + TRN_W - 12, oy, is_held(HIT_TRN, 1) ? C_ORANGE : C_NAVY, 0.95f, ">", 1);
+    if (g_st.transpose > 0) snprintf(buf, sizeof(buf), "+%d", g_st.transpose);
+    else snprintf(buf, sizeof(buf), "%d", g_st.transpose);
+    text_c(TRN_X + TRN_W / 2.0f, oy, g_st.transpose ? C_ORANGE : C_NAVY, 1.0f, buf, 1);
 
     /* табло аккорда; в режиме гитары справа - аппликатура */
     draw_sprite(&g_led[g_st.chord_on], LCD_X + 22, LCD_Y + LCD_H / 2.0f, 0);
@@ -1068,6 +1137,7 @@ static void draw_header(const UiDebug *dbg) {
         text_at(LCD_X + 96, LCD_Y + 14, RGBA8(110, 134, 156, 255), 0.5f, "key off", 0);
     }
     if (g_st.palm) text_at(LCD_X + LCD_W - 58, LCD_Y + 14, C_OR_TOP, 0.56f, "PALM", 1);
+    else if (g_st.sus) text_at(LCD_X + LCD_W - 54, LCD_Y + 14, C_OR_TOP, 0.56f, "SUS", 1);
     if (g_st.chord_on) {
         chord_name(buf, sizeof(buf), g_st.root, chord_type(g_st.minor, g_st.mod));
         text_at(LCD_X + 42, LCD_Y + 37, C_LCD_TEXT, 1.3f, buf, 1);
@@ -1097,19 +1167,22 @@ static void draw_header(const UiDebug *dbg) {
 /* быстрые аккорды: название на "кнопке", выбранный - оранжевый */
 static void draw_quick(void) {
     char buf[16];
-    int cur = g_st.chord_on ? quick_code(g_st.root, g_st.minor, g_st.mod) : -1;
+    int cur = g_st.chord_on ? quick_code(g_st.root, g_st.minor, g_st.mod, 0) : -1;   /* октаву не сравниваем */
     for (int k = 0; k < QS_N; k++) {
         float x, y;
         quick_pos(k, &x, &y);
         int c = g_st.quick[k];
-        if (c && c == cur) draw_sprite(&g_qs_on, x, y, 0);
+        int r, mi, md, oc, sel = 0;
+        if (c) {
+            quick_decode(c, &r, &mi, &md, &oc);
+            sel = quick_code(r, mi, md, 0) == cur;
+        }
+        if (sel) draw_sprite(&g_qs_on, x, y, 0);
         if (!c) { text_c(x, y - 1.0f, RGBA8(176, 160, 136, 255), 0.6f, "-", 0); continue; }
-        int r, mi, md;
-        quick_decode(c, &r, &mi, &md);
         chord_name(buf, sizeof(buf), r, chord_type(mi, md));
         float sc = 0.56f, w = (float)text_w(sc, buf);
         if (w > QS_W - 3) sc *= (float)(QS_W - 3) / w;
-        text_c(x, y - 1.0f, c == cur ? C_LCD_TEXT : C_NAVY, sc, buf, 1);
+        text_c(x, y - 1.0f, sel ? C_LCD_TEXT : C_NAVY, sc, buf, 1);
     }
 }
 
@@ -1144,6 +1217,9 @@ void ui_set_state(const AppState *s, const StringMap *m) {
     }
     if (is_guitar())
         guitar_voicing(&g_gch, g_st.chord_on, g_st.root, chord_type(g_st.minor, g_st.mod), 12 * g_st.octave, g_st.gpos);
+    /* клавиши аккорда - по выбранному аккорду (без транспозиции: как на табло) */
+    g_khl_want = g_st.chord_on && !is_guitar()
+               ? (chord_mask(g_st.root, chord_type(g_st.minor, g_st.mod)) | (g_st.root << 12) | (1 << 16)) : 0;
 }
 
 void ui_set_held(const int *kinds, const int *indices, int n) {
@@ -1153,9 +1229,17 @@ void ui_set_held(const int *kinds, const int *indices, int n) {
 }
 
 void ui_touch_glow(float x0, float y0, float x1, float y1, int down) {
-    float p0, p1;
-    if (is_guitar()) { p0 = gtr_pos_from_y(y0); p1 = gtr_pos_from_y(y1); }
-    else { p0 = strum_pos_from_xy(x0, y0); p1 = strum_pos_from_xy(x1, y1); }
+    if (!is_guitar()) {
+        /* клавиши и струны страммера: те же хитбоксы, что у звука (чёрные не горят от белых) */
+        int cur = strum_key_at(x0, y0), keys[N_STRINGS];
+        float fr[N_STRINGS];
+        if (down) { cur = strum_key_at(x1, y1); fluid_hit(cur, x1, 1.0f); }
+        int n = strum_cross(&cur, x0, y0, x1, y1, keys, fr, N_STRINGS);
+        for (int i = 0; i < n; i++) fluid_hit(keys[i], x0 + (x1 - x0) * fr[i], 1.0f);
+        fluid_feed(strum_key_at(x1, y1), x1, 0.7f);
+        return;
+    }
+    float p0 = gtr_pos_from_y(y0), p1 = gtr_pos_from_y(y1);
     int s0 = (int)p0, s1 = (int)p1;
     if (down) fluid_hit(s1, x1, 1.0f);                      /* касание: удар по струне под пальцем */
     /* все струны, через которые палец прошёл за кадр, загораются одинаково - без "зебры" */
@@ -1180,7 +1264,9 @@ int ui_hit(float x, float y, int *index) {
         if (x >= 320 && x < 366)  { *index = MODE_PAD; return HIT_MODE; }
         if (x >= 366 && x < 437)  { *index = MODE_GUITAR; return HIT_MODE; }
         if (x >= OCT_X - 6 && x < OCT_X + OCT_W / 2.0f)     { *index = -1; return HIT_OCT; }
-        if (x >= OCT_X + OCT_W / 2.0f && x < OCT_X + OCT_W + 8) { *index = 1; return HIT_OCT; }
+        if (x >= OCT_X + OCT_W / 2.0f && x < (OCT_X + OCT_W + TRN_X) / 2.0f) { *index = 1; return HIT_OCT; }
+        if (x >= (OCT_X + OCT_W + TRN_X) / 2.0f && x < TRN_X + TRN_W / 2.0f) { *index = -1; return HIT_TRN; }
+        if (x >= TRN_X + TRN_W / 2.0f && x < TRN_X + TRN_W + 8) { *index = 1; return HIT_TRN; }
     }
     /* табло: включить / выключить тональность */
     if (x >= LCD_X && x <= LCD_X + LCD_W && y >= LCD_Y - 4 && y <= LCD_Y + LCD_H + 6) return HIT_KEY;

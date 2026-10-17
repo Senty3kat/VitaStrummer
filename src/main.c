@@ -1,5 +1,5 @@
 /*
- * Vita Strummer - версия 0.8
+ * Vita Strummer - версия 0.9
  *
  * Колесо слева, аккорд выбирается в три шага:
  *   1. внешнее кольцо - тоника. Касание - аккорд "залипает"; повторное касание той же тоники - сброс;
@@ -9,9 +9,11 @@
  * Тональность (Треугольник или касание табло - вкл/выкл): берётся от текущего аккорда (Am - ля минор).
  *   На колесе - ступени лада (I ii iii ...), чужие ноты приглушены; касание тоники лада само ставит
  *   мажор / минор / уменьшённый. Без аккорда струны Strum/Pad идут по звукам лада.
- * Задняя панель (касание в средней части): ладонь на струнах - звенящее гаснет, удары короткие и глухие.
+ * Задняя панель: под правой рукой - ладонь на струнах (звенящее гаснет, удары короткие и глухие),
+ * под левой - сустейн (струны и пэд звучат дольше, но не бесконечно; гитара не глушит струны при смене аккорда).
  * Быстрые аккорды (8 штук, видны в углах слева от колеса):
- *   D-pad / левый стик - вызвать; SELECT + D-pad / SELECT + стик - сохранить текущий (без аккорда - очистить).
+ *   D-pad / левый стик - вызвать; SELECT + D-pad / SELECT + стик - сохранить текущий вместе с октавой
+ *   (без аккорда - очистить).
  *   Можно и просто коснуться "кнопки" быстрого аккорда.
  * Справа (Strum, Pad) 25 клавиш C4..C6, каждая переходит в свою струну. Без аккорда - хроматика,
  *   с аккордом струны идут парами: каждая пара - следующий звук аккорда вверх (около 4 октав).
@@ -23,6 +25,7 @@
  *     номер лада - сыграть аккорд в этой позиции (рука с этого лада), AUTO - лучшая позиция
  *   VOLUME (справа сверху): в Pad - громкость пэда, в остальных режимах - струн
  *   OCTAVE (или L / R): сдвиг струн и пэда на октаву, -2..+2
+ *   TRANSPOSE: сдвиг звука на полутоны, -6..+6 (у гитары - как каподастр, аппликатура та же)
  *   START - показать/скрыть отладку (кадры, голоса, опоздания аудио)
  */
 
@@ -31,6 +34,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
+#include <stddef.h>
 
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
@@ -52,9 +56,11 @@ unsigned int _newlib_heap_size_user = 48 * 1024 * 1024;
 #define LOG_DIR  "ux0:data/Strummer"
 #define LOG_PATH "ux0:data/Strummer/log.txt"
 #define SET_PATH "ux0:data/Strummer/settings.bin"
-/* задняя панель: x от 0 до ~1920; ладонью считается касание в средних 40% */
-#define BACK_PALM_X0 576
-#define BACK_PALM_X1 1344
+/* задняя панель: x от 0 до ~1920 (как смотреть на экран); ладонью считается касание справа */
+#define BACK_PALM_X0 1000                  /* под правой рукой: правая половина панели */
+#define BACK_PALM_X1 1760                  /* у самого края лежат пальцы, которыми держат консоль */
+#define BACK_SUS_X0 160                    /* под левой рукой - сустейн */
+#define BACK_SUS_X1 920
 #define SET_TMP  "ux0:data/Strummer/settings.tmp"
 
 static void dbg_log(const char *fmt, ...) {
@@ -90,27 +96,31 @@ static int base_note(void) { return STRING_BASE_NOTE + 12 * st.octave; }
 
 /* ---------- настройки: режим, октава, громкость, быстрые аккорды ---------- */
 #define SET_MAGIC 0x53545231u          /* "STR1" */
-typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos; } Settings;
+typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos, transpose; } Settings;
 static int set_dirty = 0;
 static uint64_t set_dirty_t = 0;
 
 static void settings_load(void) {
     Settings s;
+    memset(&s, 0, sizeof(s));
     FILE *f = fopen(SET_PATH, "rb");
     if (!f) return;
     size_t n = fread(&s, 1, sizeof(s), f);
     fclose(f);
-    if (n != sizeof(s) || s.magic != SET_MAGIC || s.size != sizeof(s)) return;
+    /* файл старой версии короче: поля, которых в нём нет, остаются по умолчанию */
+    if (n < offsetof(Settings, gpos) || s.magic != SET_MAGIC || s.size != n) return;
     if (s.mode >= 0 && s.mode < N_MODES) st.mode = s.mode;
     if (s.octave >= OCT_MIN && s.octave <= OCT_MAX) st.octave = s.octave;
     if (s.vol_strings >= 0 && s.vol_strings <= 100) st.vol_strings = s.vol_strings;
     if (s.vol_pad >= 0 && s.vol_pad <= 100) st.vol_pad = s.vol_pad;
     for (int k = 0; k < QS_N; k++)
-        if (s.quick[k] >= 0 && s.quick[k] <= quick_code(11, 1, N_MODS - 1)) st.quick[k] = s.quick[k];
+        if (s.quick[k] >= 0 && s.quick[k] <= QUICK_MAX) st.quick[k] = s.quick[k];
     st.key_on = s.key_on ? 1 : 0;
     if (s.key_root >= 0 && s.key_root < 12) st.key_root = s.key_root;
     st.key_minor = s.key_minor ? 1 : 0;
-    if (s.gpos >= 0 && s.gpos <= GT_POS_MAX) st.gpos = s.gpos;
+    if (n >= offsetof(Settings, gpos) + sizeof(int) && s.gpos >= 0 && s.gpos <= GT_POS_MAX) st.gpos = s.gpos;
+    if (n >= offsetof(Settings, transpose) + sizeof(int) && s.transpose >= TRANSPOSE_MIN && s.transpose <= TRANSPOSE_MAX)
+        st.transpose = s.transpose;
 }
 
 static void settings_save(void) {
@@ -119,7 +129,7 @@ static void settings_save(void) {
     s.magic = SET_MAGIC; s.size = sizeof(Settings);
     s.mode = st.mode; s.octave = st.octave; s.vol_strings = st.vol_strings; s.vol_pad = st.vol_pad;
     for (int k = 0; k < QS_N; k++) s.quick[k] = st.quick[k];
-    s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor; s.gpos = st.gpos;
+    s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor; s.gpos = st.gpos; s.transpose = st.transpose;
     FILE *f = fopen(SET_TMP, "wb");             /* сначала во временный файл - сбой не испортит старый */
     if (!f) return;
     size_t n = fwrite(&s, 1, sizeof(s), f);
@@ -135,7 +145,7 @@ static void send_pad(void) {
     int notes[MAX_CHORD], n = 0;
     if (st.mode == MODE_PAD && st.chord_on) {
         n = pad_voicing(st.root, chord_type(st.minor, st.mod), notes);
-        for (int i = 0; i < n; i++) notes[i] += 12 * st.octave;
+        for (int i = 0; i < n; i++) notes[i] += 12 * st.octave + st.transpose;
     }
     if (n == pad_sent_n && memcmp(notes, pad_sent, sizeof(int) * n) == 0) return;
     audio_pad(notes, n);
@@ -147,11 +157,12 @@ static void send_pad(void) {
  * переставляют на новый аккорд, а общие ноты продолжают звучать */
 static void build_guitar(void) {
     GuitarChord ng;
-    guitar_voicing(&ng, st.chord_on, st.root, chord_type(st.minor, st.mod), 12 * st.octave, st.gpos);
+    /* транспозиция у гитары - как каподастр: аппликатура та же, звук выше/ниже */
+    guitar_voicing(&ng, st.chord_on, st.root, chord_type(st.minor, st.mod), 12 * st.octave + st.transpose, st.gpos);
     if (gch_valid && guitar()) {
         int mask = 0;
         for (int s = 0; s < N_GSTR; s++) if (ng.note[s] != gch.note[s]) mask |= 1 << s;
-        if (mask) audio_guitar_damp(mask);
+        if (mask && !st.sus) audio_guitar_damp(mask);   /* с сустейном старые ноты звенят дальше */
     }
     gch = ng;
     gch_valid = 1;
@@ -181,10 +192,10 @@ static void on_strum(int zone, float frac, void *user) {
     if (guitar()) {
         int s = zone;
         if (gch.note[s] >= 0) audio_guitar(s, gch.note[s], 0, g_vel, delay);
-        else audio_guitar(s, GT_TUNING[s] + 12 * st.octave, 1, g_vel, delay);   /* заглушённая - глухой стук */
+        else audio_guitar(s, GT_TUNING[s] + 12 * st.octave + st.transpose, 1, g_vel, delay);   /* заглушённая - глухой стук */
         return;
     }
-    audio_strum(smap.zone_note[zone], delay);
+    audio_strum(smap.zone_note[zone] + st.transpose, delay);
 }
 
 static StrumFinger *finger_find(int id) {
@@ -209,6 +220,14 @@ static void octave_step(int d) {
     st.octave = o;
 }
 
+static void transpose_step(int d) {
+    int t = st.transpose + d;
+    if (t < TRANSPOSE_MIN) t = TRANSPOSE_MIN;
+    if (t > TRANSPOSE_MAX) t = TRANSPOSE_MAX;
+    if (t != st.transpose) settings_touch();
+    st.transpose = t;
+}
+
 static void set_mode(int m) {
     if (m == st.mode) return;
     st.mode = m;
@@ -230,14 +249,14 @@ static void set_volume_x(float x) {
 
 static void quick_recall(int k) {
     if (k < 0 || k >= QS_N || !st.quick[k]) return;
-    quick_decode(st.quick[k], &st.root, &st.minor, &st.mod);
+    quick_decode(st.quick[k], &st.root, &st.minor, &st.mod, &st.octave);   /* и октава, с которой сохранён */
     st.chord_on = 1;
     apply_state();
 }
 
 static void quick_store(int k) {
     if (k < 0 || k >= QS_N) return;
-    st.quick[k] = st.chord_on ? quick_code(st.root, st.minor, st.mod) : 0;
+    st.quick[k] = st.chord_on ? quick_code(st.root, st.minor, st.mod, st.octave) : 0;
     ui_set_state(&st, &smap);
     settings_touch();
 }
@@ -278,6 +297,7 @@ static int touch_down_ui(int kind, int idx, float x) {
     case HIT_QUAL:   st.minor = idx; break;
     case HIT_MODE:   set_mode(idx); break;
     case HIT_OCT:    octave_step(idx); break;
+    case HIT_TRN:    transpose_step(idx); break;
     case HIT_VOL:    set_volume_x(x); return 1;
     case HIT_QUICK:  quick_recall(idx); return 1;
     default:         return 0;
@@ -297,7 +317,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.8");
+    dbg_log("start v0.9");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));
@@ -381,17 +401,19 @@ int main(void) {
         if (pressed & SCE_CTRL_RTRIGGER) { octave_step(1); apply_state(); }
         if (pressed & SCE_CTRL_START)    show_debug = !show_debug;
 
-        /* ---- задняя панель: ладонь на струнах ----
-         * Только средняя часть панели: по краям лежат пальцы, которыми держат консоль. */
+        /* ---- задняя панель: справа - ладонь на струнах, слева - сустейн ----
+         * Самые края не считаются: там лежат пальцы, которыми держат консоль. */
         {
             SceTouchData back;
             sceTouchPeek(SCE_TOUCH_PORT_BACK, &back, 1);
-            int palm = 0;
+            int palm = 0, sus = 0;
             for (int k = 0; k < (int)back.reportNum && k < 4; k++) {
                 int bx = back.report[k].x;
                 if (bx > BACK_PALM_X0 && bx < BACK_PALM_X1) palm = 1;
+                if (bx >= BACK_SUS_X0 && bx < BACK_SUS_X1) sus = 1;
             }
             if (palm != st.palm) { st.palm = palm; audio_palm(palm); ui_set_state(&st, &smap); }
+            if (sus != st.sus) { st.sus = sus; audio_sustain(sus); ui_set_state(&st, &smap); }
         }
 
         /* ---- тач ---- */
@@ -413,7 +435,8 @@ int main(void) {
                 float speed = fabsf(p - f->pos) / dt;
                 float v = speed / (guitar() ? 30.0f : 120.0f);
                 g_vel = 0.45f + 0.55f * (v > 1.0f ? 1.0f : v);
-                strum_move(f, p, cur_map(), on_strum, NULL);
+                if (guitar()) strum_move(f, p, cur_map(), on_strum, NULL);
+                else strum_move_xy(f, x, y, cur_map(), on_strum, NULL);    /* хитбоксы клавиш */
                 ui_touch_glow(f->x, f->y, x, y, 0);
                 f->x = x; f->y = y;
                 continue;
@@ -428,7 +451,8 @@ int main(void) {
                 if (fr) {
                     fr->x = x; fr->y = y;
                     g_vel = 0.75f;
-                    strum_down(fr, id, finger_pos(x, y), cur_map(), on_strum, NULL);
+                    if (guitar()) strum_down(fr, id, finger_pos(x, y), cur_map(), on_strum, NULL);
+                    else strum_down_xy(fr, id, x, y, cur_map(), on_strum, NULL);
                     ui_touch_glow(x, y, x, y, 1);
                 }
             } else if (touch_down_ui(kind, idx, x)) {

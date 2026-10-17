@@ -9,16 +9,16 @@
 extern const char *host_frame_name;
 
 static StringMap g_m, g_gm;
-static int g_key_on, g_key_root, g_key_minor, g_palm, g_gpos;
+static int g_key_on, g_key_root, g_key_minor, g_palm, g_gpos, g_trn;
 static int g_mode;
 static void on_hit(int zone, float frac, void *u) { (void)zone; (void)frac; (void)u; }
 
 /* быстрые аккорды для превью: C, G, Am, F на D-pad; Dm7, Esus4, Cmaj7 на стике, один пустой */
 static void fill_quick(AppState *s) {
-    s->quick[0] = quick_code(0, 0, 0); s->quick[1] = quick_code(7, 0, 0);
-    s->quick[2] = quick_code(9, 1, 0); s->quick[3] = quick_code(5, 0, 0);
-    s->quick[4] = quick_code(2, 1, 1); s->quick[5] = quick_code(4, 0, 7);
-    s->quick[6] = quick_code(0, 0, 2); s->quick[7] = 0;
+    s->quick[0] = quick_code(0, 0, 0, 0); s->quick[1] = quick_code(7, 0, 0, 1);
+    s->quick[2] = quick_code(9, 1, 0, -1); s->quick[3] = quick_code(5, 0, 0, 0);
+    s->quick[4] = quick_code(2, 1, 1, 0); s->quick[5] = quick_code(4, 0, 7, 0);
+    s->quick[6] = quick_code(0, 0, 2, 2); s->quick[7] = 0;
 }
 
 static void set_state(int mode, int chord_on, int root, int minor, int mod, int octave) {
@@ -26,7 +26,7 @@ static void set_state(int mode, int chord_on, int root, int minor, int mod, int 
     memset(&s, 0, sizeof(s));
     s.mode = mode; s.chord_on = chord_on; s.root = root; s.minor = minor; s.mod = mod; s.octave = octave;
     s.vol_strings = 70; s.vol_pad = 45;
-    s.key_on = g_key_on; s.key_root = g_key_root; s.key_minor = g_key_minor; s.palm = g_palm; s.gpos = g_gpos;
+    s.key_on = g_key_on; s.key_root = g_key_root; s.key_minor = g_key_minor; s.palm = g_palm; s.gpos = g_gpos; s.transpose = g_trn;
     fill_quick(&s);
     g_mode = mode;
     stringmap_build(&g_m, chord_on, root, chord_type(minor, mod), STRING_BASE_NOTE + 12 * octave);
@@ -60,12 +60,15 @@ static void run(const char *prefix, Path path, int touch_frames, int frames_tota
             float x, y;
             path(fr, &x, &y);
             float p = pos_of(x, y);
+            int gtr = g_mode == MODE_GUITAR;
             if (fr == 0) {
                 f.x = x; f.y = y;
-                strum_down(&f, 1, p, map_of(), on_hit, NULL);
+                if (gtr) strum_down(&f, 1, p, map_of(), on_hit, NULL);
+                else strum_down_xy(&f, 1, x, y, map_of(), on_hit, NULL);
                 ui_touch_glow(x, y, x, y, 1);
             } else {
-                strum_move(&f, p, map_of(), on_hit, NULL);
+                if (gtr) strum_move(&f, p, map_of(), on_hit, NULL);
+                else strum_move_xy(&f, x, y, map_of(), on_hit, NULL);
                 ui_touch_glow(f.x, f.y, x, y, 0);
                 f.x = x; f.y = y;
             }
@@ -87,6 +90,8 @@ static void path_swipe(int fr, float *x, float *y) {
 static void path_tap(int fr, float *x, float *y) { (void)fr; *x = 820.0f; *y = 300.0f; }
 /* касание клавиши */
 static void path_key(int fr, float *x, float *y) { (void)fr; *x = 596.0f; *y = 330.0f; }
+/* проведение по передней части белых клавиш сверху вниз */
+static void path_whites(int fr, float *x, float *y) { *x = 598.0f; *y = 120.0f + 30.0f * (float)fr; }
 /* палец лежит на струне и медленно ведёт вдоль неё */
 static void path_hold(int fr, float *x, float *y) { *x = 700.0f + 6.0f * (float)fr; *y = 250.0f; }
 
@@ -106,8 +111,10 @@ int main(void) {
     shot("screen_chromatic", 0, 0);
     set_state(MODE_STRUM, 1, 0, 0, 0, 0);
     shot("screen_C", 0, 0);
+    g_trn = 2;                                        /* транспозиция +2 */
     set_state(MODE_PAD, 1, 9, 1, 1, 1);
     shot("screen_Am7_pad", HIT_QUAL, 1);
+    g_trn = 0;
     set_state(MODE_STRUM, 1, 5, 0, 7, 0);
     shot("screen_Fsus4", 0, 0);
 
@@ -119,6 +126,9 @@ int main(void) {
     run("keys", path_key, 2, 45);
     set_state(MODE_STRUM, 0, 0, 0, 0, 0);
     run("hold", path_hold, 30, 55);
+    /* проведение по передней части белых клавиш: горят только белые */
+    set_state(MODE_STRUM, 1, 2, 0, 1, 0);
+    run("whites", path_whites, 12, 30);
 
     /* тональность до мажор, выбран Am (vi); ладонь на струнах */
     g_key_on = 1; g_key_root = 0; g_key_minor = 0; g_palm = 1;

@@ -12,7 +12,7 @@
 #define BODY_H 536
 #define BODY_R 24
 
-/* верхняя полоса: логотип, капсула (MODE | OCTAVE), табло аккорда, отладка */
+/* верхняя полоса: логотип, капсула (MODE | OCTAVE | TRANSPOSE), табло аккорда, отладка */
 #define CAP_X 238
 #define CAP_Y 10
 #define CAP_W 378
@@ -23,7 +23,9 @@
 #define RADIO_Y 44
 #define OCT_X 452             /* "пилюля" октавы */
 #define OCT_Y 31
-#define OCT_W 152
+#define OCT_W 70
+#define TRN_X 534             /* "пилюля" транспозиции (та же высота) */
+#define TRN_W 70
 #define OCT_H 24
 #define LCD_X 626             /* табло аккорда */
 #define LCD_Y 12

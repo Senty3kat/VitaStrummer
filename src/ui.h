@@ -20,8 +20,10 @@ typedef struct {
     int key_on;      /* режим тональности */
     int key_root;    /* тоника тональности 0..11 */
     int key_minor;   /* 0 мажор, 1 натуральный минор */
-    int palm;        /* ладонь на струнах (задняя панель) */
+    int palm;        /* ладонь на струнах (задняя панель, правая рука) */
+    int sus;         /* сустейн (задняя панель, левая рука) */
     int gpos;        /* гитара: позиция руки на грифе, 0 - авто, 1..GT_POS_MAX - с этого лада */
+    int transpose;   /* транспозиция звука в полутонах, TRANSPOSE_MIN..MAX (как каподастр) */
 } AppState;
 
 typedef struct {
@@ -30,12 +32,21 @@ typedef struct {
     int show;        /* показывать отладку */
 } UiDebug;
 
-enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS };
+enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN };
 
-/* код быстрого аккорда (0 - пусто) */
-static inline int quick_code(int root, int minor, int mod) { return 1 + root + 12 * minor + 24 * mod; }
-static inline void quick_decode(int c, int *root, int *minor, int *mod) {
-    c -= 1; *root = c % 12; *minor = (c / 12) % 2; *mod = c / 24;
+#define TRANSPOSE_MIN (-6)
+#define TRANSPOSE_MAX 6
+
+/* код быстрого аккорда (0 - пусто): тоника, качество, модификатор и октава.
+ * Октава хранится как (oct + 5) % 5: у старых кодов (без октавы) она получается 0 */
+#define QUICK_MAX (1 + 11 + 12 + 24 * 8 + 216 * 4)
+static inline int quick_code(int root, int minor, int mod, int oct) {
+    return 1 + root + 12 * minor + 24 * mod + 216 * ((oct + 5) % 5);
+}
+static inline void quick_decode(int c, int *root, int *minor, int *mod, int *oct) {
+    c -= 1; *root = c % 12; *minor = (c / 12) % 2; *mod = (c / 24) % 9;
+    int oi = c / 216;
+    *oct = oi <= 2 ? oi : oi - 5;
 }
 
 int  ui_init(void);

@@ -32,6 +32,10 @@ static const float PAD_RELEASE_S = 0.180f;
 /* громкость слоёв 0..1 (ручка на экране); 0.7 - уровень по умолчанию */
 static float g_vol_strings = 0.7f, g_vol_pad = 0.7f;
 static int g_palm = 0;                /* ладонь на струнах (задняя панель): звук короткий и глухой */
+static int g_sus = 0;                 /* сустейн (задняя панель под левой рукой): звучит дольше, но гаснет */
+#define SUS_STRUM_MUL 2.6f            /* во сколько раз дольше струны страммера */
+#define SUS_PAD_MUL 5.0f              /* во сколько раз дольше отпускание пэда */
+#define SUS_GTR_MUL 1.9f              /* во сколько раз дольше гитара */
 #define VOL_SCALE (1.0f / 0.7f)
 
 static float note_hz(int note) { return 440.0f * powf(2.0f, (float)(note - 69) / 12.0f); }
@@ -61,6 +65,14 @@ static Voice *alloc_voice(void) {
     return best;
 }
 
+/* затухание струны страммера: нижние звучат дольше верхних; ладонь - короткий щипок, сустейн - дольше */
+static float strum_tau(int note) {
+    float tau = 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
+    if (g_palm) return 0.09f;
+    return g_sus ? tau * SUS_STRUM_MUL : tau;
+}
+static float pad_release(void) { return (g_sus ? PAD_RELEASE_S * SUS_PAD_MUL : PAD_RELEASE_S) / 4.0f; }
+
 static void start_strum(int note) {
     Voice *t = NULL;
     /* та же нота ещё звучит - перезапускаем её же голос: фаза непрерывна, щелчка нет */
@@ -76,10 +88,7 @@ static void start_strum(int note) {
     t->inc = note_hz(note) / (float)SYNTH_RATE;
     t->stage = ST_ATTACK;
     t->att_inc = 1.0f / (STRUM_ATTACK_S * (float)SYNTH_RATE);
-    /* нижние струны звучат дольше верхних */
-    float tau = 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
-    if (g_palm) tau = 0.09f;                 /* приглушено ладонью - короткий щипок */
-    t->dec_mul = exp_mul(tau);
+    t->dec_mul = exp_mul(strum_tau(note));
     t->gain = STRUM_GAIN;
 }
 
@@ -114,7 +123,7 @@ void synth_pad(const int *notes, int n) {
         }
         t->stage = ST_ATTACK;
         t->att_inc = 1.0f / (PAD_ATTACK_S * (float)SYNTH_RATE);
-        t->rel_mul = exp_mul(PAD_RELEASE_S / 4.0f);
+        t->rel_mul = exp_mul(pad_release());
         t->gain = PAD_GAIN;
     }
 }
@@ -127,6 +136,18 @@ void synth_palm(int on) {
         synth_guitar_damp_tau(0x3F, 0.07f);
     }
     g_palm = on;
+}
+
+/* сустейн: звучащие ноты страммера и пэда сразу переходят на новое затухание (без щелчков -
+ * меняется только скорость спада); гитара - для следующих щипков, и аккорд не глушит струны */
+void synth_sustain(int on) {
+    on = on ? 1 : 0;
+    if (on == g_sus) return;
+    g_sus = on;
+    for (int i = 0; i < SYNTH_VOICES; i++) {
+        if (v[i].kind == V_STRUM && !g_palm) v[i].dec_mul = exp_mul(strum_tau(v[i].note));
+        if (v[i].kind == V_PAD) v[i].rel_mul = exp_mul(pad_release());
+    }
 }
 
 void synth_volume(float strings, float pad) {
@@ -281,6 +302,7 @@ static void guitar_pluck(int s, int note, float vel) {
     float hz = note_hz(note) * powf(2.0f, p->cents / 1200.0f);
     float t60 = muted ? 0.05f : p->t60 * (note < 52 ? 1.0f : 52.0f / (float)note);   /* выше - короче */
     if (g_palm && !muted) t60 = 0.16f + 0.03f * (float)(N_GSTR_SYNTH - 1 - s);     /* palm mute: басы чуть дольше */
+    else if (g_sus && !muted) t60 *= SUS_GTR_MUL;                                    /* сустейн */
     if (t60 < 0.05f) t60 = 0.05f;
     float damp_c = p->loop_damp + (muted || g_palm ? 0.25f : 0.0f);
     line_tune(&k->a, hz, damp_c, t60);

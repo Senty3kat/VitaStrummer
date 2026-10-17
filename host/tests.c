@@ -1,6 +1,7 @@
 /* Проверки логики без консоли: аккорды, зоны струн, стрaм, синт (пишет WAV для прослушивания) */
 #include "../src/theory.h"
 #include "../src/strum.h"
+#include "../src/ui.h"
 #include "../src/synth.h"
 #include "../src/layout.h"
 #include <stdio.h>
@@ -103,6 +104,20 @@ static void test_strum(void) {
     CHECK(nhits == m.nzones);
 }
 
+/* быстрые аккорды: код с октавой, старые коды (без октавы) - октава 0 */
+static void test_quick(void) {
+    for (int oct = -2; oct <= 2; oct++)
+        for (int mod = 0; mod < N_MODS; mod++) {
+            int r, mi, md, oc, c = quick_code(11, 1, mod, oct);
+            CHECK(c > 0 && c <= QUICK_MAX);
+            quick_decode(c, &r, &mi, &md, &oc);
+            CHECK(r == 11 && mi == 1 && md == mod && oc == oct);
+        }
+    int r, mi, md, oc;
+    quick_decode(1 + 7 + 12 * 0 + 24 * 3, &r, &mi, &md, &oc);   /* как писала v0.8 */
+    CHECK(r == 7 && mi == 0 && md == 3 && oc == 0);
+}
+
 static void test_keys(void) {
     /* 15 белых и 10 чёрных, центры клавиш идут строго вверх с ростом ноты */
     int nb = 0;
@@ -127,10 +142,43 @@ static void test_keys(void) {
         CHECK((int)strum_pos_from_xy((BULB_X1 + BAR_X1) / 2.0f, strum_string_y(i)) == i);
     }
 
-    /* движение вбок с клавиш на струны: положение меняется плавно, без скачков */
+    /* хитбоксы: на передней части белых (где чёрных нет) чёрные не срабатывают,
+     * а там, где чёрные выступают, на высоте чёрной звучит чёрная, а не соседняя белая */
+    float xf = (WK_XF + WK_X1) / 2.0f, xa = (BK_X0 + BK_X1) / 2.0f;
+    for (int i = 0; i < N_STRINGS; i++) {
+        if (key_is_black(i)) {
+            CHECK(!key_is_black(strum_key_at(xf, key_center_y(i))));
+            CHECK(strum_key_at(xa, key_center_y(i)) == i);
+            CHECK(strum_key_at(xa, key_center_y(i) + BK_H / 2.0f - 0.5f) == i);   /* у самого края чёрной */
+            CHECK(strum_key_at(xa, key_center_y(i) - BK_H / 2.0f + 0.5f) == i);
+        } else {
+            float y0, y1, b0, b1;
+            white_key_extents(i, &y0, &y1, &b0, &b1);
+            CHECK(strum_key_at(xf, key_center_y(i)) == i);
+            CHECK(strum_key_at(xa, (b0 + b1) / 2.0f) == i);
+        }
+    }
+    /* проведение по передней части белых снизу вверх: только белые, все подряд, по одному разу */
+    {
+        int cur = strum_key_at(xf, KB_BOTTOM - 1.0f), keys[N_STRINGS], nw = 0;
+        float fr[N_STRINGS];
+        int n = strum_cross(&cur, xf, KB_BOTTOM - 1.0f, xf, KB_TOP + 1.0f, keys, fr, N_STRINGS);
+        for (int i = 0; i < n; i++) {
+            CHECK(!key_is_black(keys[i]));
+            if (i) CHECK(keys[i] > keys[i - 1] && fr[i] >= fr[i - 1]);
+        }
+        for (int i = 0; i < N_STRINGS; i++) nw += !key_is_black(i);
+        CHECK(n == nw - 1);                          /* все белые, кроме той, с которой начали */
+        /* там, где выступают чёрные - все 24 клавиши */
+        cur = strum_key_at(xa, KB_BOTTOM - 1.0f);
+        n = strum_cross(&cur, xa, KB_BOTTOM - 1.0f, xa, KB_TOP + 1.0f, keys, fr, N_STRINGS);
+        CHECK(n == N_STRINGS - 1);
+    }
+
+    /* движение вбок с клавиш на нити и струны: положение меняется плавно, без скачков */
     for (float y = KB_TOP; y <= KB_BOTTOM; y += 7.0f) {
-        float prev = strum_pos_from_xy(BK_X0, y);
-        for (float x = BK_X0; x <= BAR_X1; x += 2.0f) {
+        float prev = strum_pos_from_xy(WK_X1, y);
+        for (float x = WK_X1; x <= BAR_X1; x += 2.0f) {
             float p = strum_pos_from_xy(x, y);
             CHECK(fabsf(p - prev) < 0.1f);
             prev = p;
@@ -225,6 +273,26 @@ static void test_key(void) {
     synth_palm(0);
     printf("palm: level after 0.4 s %ld vs open %ld\n", e_palm, e_open);
     CHECK(e_palm * 10 < e_open);
+
+    /* сустейн: нота страммера через 2 с звучит заметно громче, но через 12 с почти стихла */
+    long e_dry = 0, e_sus = 0, e_tail = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        synth_init();
+        synth_sustain(pass);
+        synth_strum(60, 0);
+        long e = 0;
+        for (int i = 0; i < 375; i++) synth_render(b, 256);                     /* 2 с */
+        for (int i = 0; i < 20; i++) { synth_render(b, 256); for (int k = 0; k < 256; k++) e += abs(b[k]); }
+        if (pass) {
+            e_sus = e;
+            for (int i = 0; i < 1875; i++) synth_render(b, 256);                /* ещё 10 с */
+            for (int i = 0; i < 20; i++) { synth_render(b, 256); for (int k = 0; k < 256; k++) e_tail += abs(b[k]); }
+        } else e_dry = e;
+    }
+    synth_sustain(0);
+    printf("sustain: level after 2 s %ld vs dry %ld, after 12 s %ld\n", e_sus, e_dry, e_tail);
+    CHECK(e_sus > e_dry * 4);
+    CHECK(e_tail * 40 < e_sus);                     /* гаснет: не бесконечно */
 }
 
 static void wav_write(const char *path, const int16_t *s, int n) {
@@ -296,6 +364,7 @@ int main(void) {
     test_theory();
     test_strum();
     test_keys();
+    test_quick();
     test_guitar();
     test_key();
     test_guitar_sound();
