@@ -4,7 +4,7 @@
 #define AUDIO_H
 
 /* размер блока: 256 сэмплов = 5.3 мс при 48 кГц (в сэмплере было 1024 = 21 мс) */
-#define AUDIO_GRAIN 256
+#define AUDIO_GRAIN 128      /* 2.7 мс при 48 кГц: меньше задержка от касания до звука */
 
 int audio_start(void);
 void audio_stop(void);

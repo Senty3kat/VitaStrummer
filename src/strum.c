@@ -247,7 +247,10 @@ void strum_gtr_move(StrumFinger *f, float x, float y, StrumHit hit, void *user) 
         order[k] = i;
     }
     if (f->gfresh > 0) f->gfresh--;
-    for (int k = 0; k < ns; k++) { f->zone = order[k]; hit(order[k], fr[k], user); }
+    /* Пересечения уже случились (между прошлым и этим опросом тача): первое в кадре играет сразу,
+     * остальные - с тем же интервалом после него. Раньше откладывали на долю кадра от начала -
+     * лишние 0..16 мс задержки, «бой» казался запаздывающим. */
+    for (int k = 0; k < ns; k++) { f->zone = order[k]; hit(order[k], fr[k] - fr[0], user); }
     f->pos = gtr_pos_from_y(y);
 }
 

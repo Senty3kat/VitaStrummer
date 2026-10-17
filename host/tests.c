@@ -106,7 +106,8 @@ static void test_strum(void) {
 
 /* гитара: тремоло - каждое пересечение линии струны звучит, дрожание у линии - нет */
 static int g_ghits[16], g_gn;
-static void gtr_hit(int zone, float frac, void *u) { (void)frac; (void)u; if (g_gn < 16) g_ghits[g_gn++] = zone; }
+static float g_gfr[16];
+static void gtr_hit(int zone, float frac, void *u) { (void)u; if (g_gn < 16) { g_gfr[g_gn] = frac; g_ghits[g_gn++] = zone; } }
 static void test_gtr_tremolo(void) {
     StrumFinger f;
     memset(&f, 0, sizeof(f));
@@ -134,6 +135,9 @@ static void test_gtr_tremolo(void) {
     strum_gtr_move(&f, x, gtr_string_y(5) - 20.0f, gtr_hit, NULL);
     CHECK(g_gn == 6);
     for (int i = 0; i < g_gn; i++) CHECK(g_ghits[i] == i);
+    /* первое пересечение в кадре играет сразу (без задержки), остальные - следом по порядку */
+    CHECK(g_gfr[0] == 0.0f);
+    for (int i = 1; i < g_gn; i++) CHECK(g_gfr[i] > g_gfr[i - 1] && g_gfr[i] < 1.0f);
 }
 
 /* быстрые аккорды: код с октавой и позицией на грифе; старые коды - октава 0, позиция авто */
