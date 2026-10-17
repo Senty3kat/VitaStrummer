@@ -9,6 +9,9 @@ typedef struct {
     int kind, stage, note;
     float phase, inc;            /* фаза 0..1 и шаг за сэмпл */
     float env, att_inc, dec_mul, rel_mul, gain;
+    /* dreamy: FM-язычок (модулятор 1:1, индекс гаснет) + обертон вибрафона 4:1 */
+    int dream;
+    float mph, midx, midx_mul, bph, binc, bamp, bmul;
 } Voice;
 
 /* отложенный удар: kind 0 - струна страммера, 1 - гитарная струна */
@@ -48,8 +51,56 @@ static float guitar_render_sample(void);
 static void guitar_pluck(int s, int note, float vel, int fret);
 void synth_guitar_damp_tau(int mask, float tau);
 
+/* ---- dreamy-звук струн: калимба / вибрафон / электропиано ----
+ * Дёшево: синус - таблицей; на голос две таблицы за сэмпл. Общие на все голоса: тремоло (как мотор
+ * вибрафона), лёгкое вибрато и небольшой ревер (4 гребёнки + 2 всепропускающих, как Freeverb). */
+#define DREAM_GAIN 0.19f                /* синусы складываются плотнее треугольников - тише */
+#define SIN_N 1024
+static float g_sin[SIN_N + 1];
+static int g_dream = 0;
+static float g_lfo_t = 0.0f, g_lfo_v = 0.0f;          /* фазы тремоло и вибрато 0..1 */
+static inline float sinlut(float x) {                 /* sin(2 pi x), x в пределах -1..2 (без floorf) */
+    if (x < 0.0f) x += 1.0f;
+    if (x >= 1.0f) x -= 1.0f;
+    float f = x * (float)SIN_N;
+    int i = (int)f;
+    return g_sin[i] + (g_sin[i + 1] - g_sin[i]) * (f - (float)i);
+}
+#define DR_NC 4
+#define DR_NA 2
+static const int DR_CL[DR_NC] = { 1214, 1293, 1389, 1475 };   /* длины Freeverb, пересчитаны на 48 кГц */
+static const int DR_AL[DR_NA] = { 605, 480 };
+static float dr_c[DR_NC][1475], dr_a[DR_NA][605], dr_lp[DR_NC];
+static int dr_ci[DR_NC], dr_ai[DR_NA];
+#define DR_FB 0.86f                                  /* длина хвоста */
+#define DR_DAMP 0.28f                                /* хвост темнее */
+#define DR_WET 0.34f
+static float dream_reverb(float x) {
+    float y = 0.0f;
+    for (int k = 0; k < DR_NC; k++) {
+        float o = dr_c[k][dr_ci[k]];
+        dr_lp[k] = o + (dr_lp[k] - o) * DR_DAMP;
+        dr_c[k][dr_ci[k]] = x + dr_lp[k] * DR_FB;
+        if (++dr_ci[k] >= DR_CL[k]) dr_ci[k] = 0;
+        y += o;
+    }
+    y *= 0.25f;
+    for (int k = 0; k < DR_NA; k++) {
+        float b = dr_a[k][dr_ai[k]], o = b - y;
+        dr_a[k][dr_ai[k]] = y + b * 0.5f;
+        if (++dr_ai[k] >= DR_AL[k]) dr_ai[k] = 0;
+        y = o;
+    }
+    return y;
+}
+
+void synth_strum_sound(int dreamy) { g_dream = dreamy ? 1 : 0; }
+
 void synth_init(void) {
     memset(v, 0, sizeof(v));
+    for (int i = 0; i <= SIN_N; i++) g_sin[i] = sinf(2.0f * 3.14159265f * (float)i / (float)SIN_N);
+    memset(dr_c, 0, sizeof(dr_c)); memset(dr_a, 0, sizeof(dr_a)); memset(dr_lp, 0, sizeof(dr_lp));
+    memset(dr_ci, 0, sizeof(dr_ci)); memset(dr_ai, 0, sizeof(dr_ai));
     guitar_init();
     npend = 0;
     clock_s = 0;
@@ -68,8 +119,9 @@ static Voice *alloc_voice(void) {
 }
 
 /* затухание струны страммера: нижние звучат дольше верхних; ладонь - короткий щипок, сустейн - дольше */
-static float strum_tau(int note) {
-    float tau = 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
+static float strum_tau(int note, int dream) {
+    /* dreamy звенит дольше и мягче гаснет вверх по диапазону */
+    float tau = dream ? 2.4f * powf(2.0f, -(float)(note - 60) / 30.0f) : 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
     if (g_palm) return 0.09f;
     return g_sus ? tau * SUS_STRUM_MUL : tau;
 }
@@ -90,8 +142,18 @@ static void start_strum(int note) {
     t->inc = note_hz(note) / (float)SYNTH_RATE;
     t->stage = ST_ATTACK;
     t->att_inc = 1.0f / (STRUM_ATTACK_S * (float)SYNTH_RATE);
-    t->dec_mul = exp_mul(strum_tau(note));
-    t->gain = STRUM_GAIN;
+    t->dream = g_dream;
+    t->dec_mul = exp_mul(strum_tau(note, t->dream));
+    t->gain = t->dream ? DREAM_GAIN : STRUM_GAIN;
+    if (t->dream) {
+        float hz = note_hz(note);
+        t->midx = 0.55f;                                   /* яркий удар язычка ... */
+        t->midx_mul = exp_mul(0.28f);                      /* ... быстро смягчается */
+        t->binc = 4.0f * t->inc;                           /* обертон вибрафона/калимбы */
+        t->bamp = hz < 1400.0f ? 0.30f : 0.12f;            /* у верхних нот - тише (не звенит) */
+        t->bmul = exp_mul(0.22f);
+        if (t->kind == V_STRUM && t->env == 0.0f) { t->mph = 0.0f; t->bph = 0.0f; }
+    }
 }
 
 void synth_strum(int note, int delay) {
@@ -147,7 +209,7 @@ void synth_sustain(int on) {
     if (on == g_sus) return;
     g_sus = on;
     for (int i = 0; i < SYNTH_VOICES; i++) {
-        if (v[i].kind == V_STRUM && !g_palm) v[i].dec_mul = exp_mul(strum_tau(v[i].note));
+        if (v[i].kind == V_STRUM && !g_palm) v[i].dec_mul = exp_mul(strum_tau(v[i].note, v[i].dream));
         if (v[i].kind == V_PAD) v[i].rel_mul = exp_mul(pad_release());
     }
 }
@@ -467,7 +529,11 @@ void synth_render(int16_t *out, int n) {
                 pend[p] = pend[--npend];
             } else p++;
         }
-        float mix = 0.0f;
+        float mix = 0.0f, dmix = 0.0f;
+        /* общие LFO dreamy: тремоло 4.6 Гц, вибрато 5.3 Гц (+-2 цента) */
+        g_lfo_t += 4.6f / (float)SYNTH_RATE; if (g_lfo_t >= 1.0f) g_lfo_t -= 1.0f;
+        g_lfo_v += 5.3f / (float)SYNTH_RATE; if (g_lfo_v >= 1.0f) g_lfo_v -= 1.0f;
+        float vib = 1.0f + 0.0012f * sinlut(g_lfo_v);
         for (int i = 0; i < SYNTH_VOICES; i++) {
             Voice *t = &v[i];
             if (t->kind == V_FREE) continue;
@@ -486,12 +552,27 @@ void synth_render(int16_t *out, int n) {
                 break;
             }
             if (t->stage != ST_ATTACK && t->stage != ST_SUSTAIN && t->env < ENV_OFF) { t->kind = V_FREE; continue; }
+            if (t->dream) {                                /* dreamy-струна - в свою шину (тремоло + ревер) */
+                float m = sinlut(t->mph) * t->midx;
+                float smp = sinlut(t->phase + m) + sinlut(t->bph) * t->bamp;
+                float di = t->inc * vib;
+                t->phase += di; if (t->phase >= 1.0f) t->phase -= 1.0f;
+                t->mph += di;   if (t->mph >= 1.0f) t->mph -= 1.0f;
+                t->bph += t->binc * vib; if (t->bph >= 1.0f) t->bph -= 1.0f;
+                t->midx *= t->midx_mul;
+                t->bamp *= t->bmul;
+                dmix += smp * t->env * t->gain;
+                continue;
+            }
             /* треугольник: 1 -> -1 -> 1 за период */
             float tri = 4.0f * fabsf(t->phase - 0.5f) - 1.0f;
             t->phase += t->inc;
             if (t->phase >= 1.0f) t->phase -= 1.0f;
             mix += tri * t->env * t->gain * (t->kind == V_PAD ? g_vol_pad : g_vol_strings) * VOL_SCALE;
         }
+        /* dreamy-шина: тремоло, потом ревер (ревер считается всегда - хвост доигрывает после выключения) */
+        dmix *= (1.0f - 0.16f * (0.5f + 0.5f * sinlut(g_lfo_t))) * g_vol_strings * VOL_SCALE;
+        mix += dmix + DR_WET * dream_reverb(dmix * 0.6f);
         mix += guitar_render_sample() * g_vol_strings * VOL_SCALE;
         int o = (int)(soft_clip(mix) * 32000.0f);
         out[s] = (int16_t)o;

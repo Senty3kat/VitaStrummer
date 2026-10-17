@@ -7,21 +7,22 @@
 #ifdef VS_MIDI
 #include "psvita_usb_audio_midi.h"
 
-#define MIDI_CH 0                         /* канал 1 */
 #define MAX_EV PSVITA_USB_MIDI_MAX_EVENTS
 
 static int g_loaded = 0, g_load_res = 0;  /* клиент загружен (1) / не вышло (-1) */
 static int g_acquired = 0, g_rx = 0, g_tx = 0, g_err = 0;
-static float g_off_t[128];                /* сколько ещё звучит нота, переданная на компьютер */
+static float g_off_t[2][128];             /* сколько ещё звучит нота, переданная на компьютер (по каналам) */
 static PsvitaUsbMidiEvent g_out[MAX_EV];
 static unsigned g_nout = 0;
 
+static void flush(void);
 static void put3(int st, int d1, int d2) {
+    if (g_nout >= MAX_EV) flush();
     if (g_nout >= MAX_EV) return;
     PsvitaUsbMidiEvent *e = &g_out[g_nout++];
     memset(e, 0, sizeof(*e));
     e->size = 3;
-    e->data[0] = (uint8_t)(st | MIDI_CH);
+    e->data[0] = (uint8_t)st;               /* статус уже с каналом */
     e->data[1] = (uint8_t)(d1 & 0x7f);
     e->data[2] = (uint8_t)(d2 & 0x7f);
 }
@@ -34,10 +35,18 @@ static void flush(void) {
     g_nout = 0;
 }
 
-static void all_off(void) {
+void midi_all_off(int ch) {
     for (int n = 0; n < 128; n++)
-        if (g_off_t[n] > 0.0f) { put3(0x80, n, 0); g_off_t[n] = 0.0f; if (g_nout >= MAX_EV) flush(); }
+        if (g_off_t[ch][n] > 0.0f) { put3(0x80 | ch, n, 0); g_off_t[ch][n] = 0.0f; }
     flush();
+}
+
+static void all_off(void) { midi_all_off(MIDI_CH_STR); midi_all_off(MIDI_CH_PAD); }
+
+void midi_off(int ch, int note) {
+    if (note < 0 || note > 127 || g_off_t[ch][note] <= 0.0f) return;
+    g_off_t[ch][note] = 0.0f;
+    if (g_acquired) put3(0x80 | ch, note, 0);
 }
 
 void midi_set(int rx, int tx) {
@@ -73,19 +82,23 @@ int midi_state(void) {
 
 int midi_error(void) { return g_err ? g_err : g_load_res; }
 
-void midi_note(int note, int vel, float dur) {
+void midi_note(int ch, int note, int vel, float dur) {
     if (!g_tx || !g_acquired || note < 0 || note > 127) return;
     if (vel < 1) vel = 1;
     if (vel > 127) vel = 127;
-    if (g_off_t[note] > 0.0f) put3(0x80, note, 0);         /* та же нота ещё звучит - сначала off */
-    put3(0x90, note, vel);
-    g_off_t[note] = dur > 0.02f ? dur : 0.02f;
+    if (g_off_t[ch][note] > 0.0f) put3(0x80 | ch, note, 0);    /* та же нота ещё звучит - сначала off */
+    put3(0x90 | ch, note, vel);
+    g_off_t[ch][note] = dur > 0.02f ? dur : 0.02f;
 }
 
 void midi_frame(float dt) {
     if (!g_acquired) return;
-    for (int n = 0; n < 128; n++)
-        if (g_off_t[n] > 0.0f && (g_off_t[n] -= dt) <= 0.0f) { g_off_t[n] = 0.0f; put3(0x80, n, 0); }
+    for (int c = 0; c < 2; c++)
+        for (int n = 0; n < 128; n++)
+            if (g_off_t[c][n] > 0.0f && g_off_t[c][n] < MIDI_HOLD * 0.5f && (g_off_t[c][n] -= dt) <= 0.0f) {
+                g_off_t[c][n] = 0.0f;
+                put3(0x80 | c, n, 0);
+            }
     flush();
 }
 
@@ -110,7 +123,9 @@ static int g_rx = 0, g_tx = 0;
 void midi_set(int rx, int tx) { g_rx = rx; g_tx = tx; }
 int  midi_state(void) { return (g_rx || g_tx) ? MIDI_NO_PLUGIN : MIDI_OFF; }
 int  midi_error(void) { return 0; }
-void midi_note(int note, int vel, float dur) { (void)note; (void)vel; (void)dur; }
+void midi_note(int ch, int note, int vel, float dur) { (void)ch; (void)note; (void)vel; (void)dur; }
+void midi_off(int ch, int note) { (void)ch; (void)note; }
+void midi_all_off(int ch) { (void)ch; }
 void midi_frame(float dt) { (void)dt; }
 int  midi_read(int *notes, int *vels, int max) { (void)notes; (void)vels; (void)max; return 0; }
 void midi_shutdown(void) { }

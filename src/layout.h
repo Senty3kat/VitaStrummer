@@ -36,11 +36,12 @@
 #define LOGO_X1 232           /* логотип: x < LOGO_X1, y < LOGO_Y1 */
 #define LOGO_Y1 62
 #define SET_X 210
-#define SET_Y 96
+#define SET_Y 58
 #define SET_W 540
-#define SET_H 330
-#define SET_ROW_Y0 172        /* центр первой строки */
-#define SET_ROW_DY 76
+#define SET_H 418
+#define SET_ROW_Y0 128        /* центр первой строки */
+#define SET_ROW_DY 72
+#define SET_ROWS 4
 #define SET_CHK_X 262         /* центр галочки */
 #define SET_CHK 34            /* размер галочки */
 

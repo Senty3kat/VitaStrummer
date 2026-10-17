@@ -11,8 +11,14 @@ void midi_set(int rx, int tx);
 int  midi_state(void);                   /* MIDI_* для страницы настроек */
 int  midi_error(void);                   /* последний код ошибки (для отладки) */
 
-/* передача: нота звучит dur секунд, потом note off (повтор той же ноты - off сразу) */
-void midi_note(int note, int vel, float dur);
+/* передача. ch: MIDI_CH_STR (канал 1) - струны страммера и гитара, MIDI_CH_PAD (канал 2) - пэд.
+ * Нота звучит dur секунд, потом note off (повтор той же ноты - сначала off). MIDI_HOLD - пока не off. */
+#define MIDI_CH_STR 0
+#define MIDI_CH_PAD 1
+#define MIDI_HOLD 1e9f
+void midi_note(int ch, int note, int vel, float dur);
+void midi_off(int ch, int note);         /* note off, если нота звучит */
+void midi_all_off(int ch);
 /* раз в кадр: отправить накопленное, погасить истёкшие ноты (dt - секунды кадра) */
 void midi_frame(float dt);
 /* приём: принятые note on (note, vel), до max штук; note off не нужны (страммер - щипки) */

@@ -119,6 +119,8 @@ int main(void) {
     g_trn = 0;
     set_state(MODE_STRUM, 1, 5, 0, 7, 0);
     shot("screen_Fsus4", 0, 0);
+    set_state(MODE_PADONLY, 1, 2, 1, 0, 0);           /* Pad only: Dm, пэд включён */
+    shot("screen_padonly", 0, 0);
     g_set = 1;                                        /* страница настроек: передача и объём включены */
     set_state(MODE_STRUM, 1, 5, 0, 7, 0);
     shot("screen_settings", 0, 0);

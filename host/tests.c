@@ -5,6 +5,7 @@
 #include "../src/synth.h"
 #include "../src/layout.h"
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -404,6 +405,37 @@ static void test_key(void) {
     CHECK(e_tail * 40 < e_sus);                     /* гаснет: не бесконечно */
 }
 
+/* dreamy-звук струн: звучит, не клиппует, гаснет; цена против классики - в выводе */
+static void wav_write(const char *path, const int16_t *s, int n);
+static void test_dreamy(void) {
+    static int16_t buf[48000 * 14];
+    const int N = 48000 * 14;
+    double t_cls = 0, t_drm = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        synth_init();
+        synth_strum_sound(pass);
+        clock_t c0 = clock();
+        int clip = 0, pk1 = 0, pk_end = 0;
+        for (int pos = 0; pos < N; pos += 256) {
+            if (pos == 0) for (int k = 0; k < 24; k++) synth_strum(48 + k * 2, k * 300);   /* 24 голоса */
+            synth_render(buf + pos, 256);
+            for (int i = 0; i < 256; i++) {
+                int a = abs(buf[pos + i]);
+                if (a >= 32000) clip++;
+                if (pos < 48000 && a > pk1) pk1 = a;
+                if (pos > N - 48000 && a > pk_end) pk_end = a;
+            }
+        }
+        double t = (double)(clock() - c0) / CLOCKS_PER_SEC;
+        if (pass) t_drm = t; else t_cls = t;
+        printf("%s: peak %d, clip %d, tail peak %d\n", pass ? "dreamy" : "classic", pk1, clip, pk_end);
+        CHECK(clip == 0 && pk1 > 3000);
+        if (pass) { CHECK(pk_end * 20 < pk1); wav_write("out/dreamy_demo.wav", buf, N); }
+    }
+    printf("dreamy cpu: x%.2f of classic (24 voices), %.1f ms per audio second on this PC\n", t_drm / (t_cls > 1e-9 ? t_cls : 1e-9), t_drm * 1000.0 / 14.0);
+    synth_strum_sound(0);
+}
+
 static void wav_write(const char *path, const int16_t *s, int n) {
     FILE *f = fopen(path, "wb");
     if (!f) return;
@@ -479,6 +511,7 @@ int main(void) {
     test_key();
     test_guitar_sound();
     test_synth();
+    test_dreamy();
     printf(fails ? "\n%d FAILED\n" : "\nall tests passed\n", fails);
     return fails ? 1 : 0;
 }

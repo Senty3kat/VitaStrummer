@@ -4,10 +4,13 @@
 
 #include "theory.h"
 
-enum { MODE_STRUM = 0, MODE_PAD = 1, MODE_GUITAR = 2, N_MODES = 3 };
+/* MODE_PADONLY - пэд без струн: струнная панель - большая кнопка вкл/выкл пэда */
+enum { MODE_STRUM = 0, MODE_PAD = 1, MODE_GUITAR = 2, MODE_PADONLY = 3, N_MODES = 4 };
+static inline int mode_pad(int m) { return m == MODE_PAD || m == MODE_PADONLY; }
 
 typedef struct {
-    int mode;        /* MODE_STRUM / MODE_PAD / MODE_GUITAR */
+    int mode;        /* MODE_STRUM / MODE_PAD / MODE_GUITAR / MODE_PADONLY */
+    int pad_off;     /* Pad only: пэд выключен касанием панели (аккорд остаётся выбранным) */
     int chord_on;    /* аккорд "залип" */
     int root;        /* высота тоники 0..11 */
     int minor;       /* качество: 0 мажор, 1 минор (кнопки в центре колеса) */
@@ -28,6 +31,7 @@ typedef struct {
     int midi_rx;     /* приём MIDI по USB (ноты с компьютера; пока только в хроматике) */
     int midi_tx;     /* передача MIDI по USB (ноты Strum на компьютер) */
     int wide;        /* объёмный звук: правый канал +10 мс */
+    int sound;       /* звук струн: 0 - классика (треугольник), 1 - dreamy (калимба/вибрафон/эл. пиано + ревер) */
     int midi_state;  /* MIDI_* (midi.h) - для строки состояния */
 } AppState;
 
@@ -38,7 +42,7 @@ typedef struct {
 } UiDebug;
 
 enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN, HIT_LOGO, HIT_SET };
-/* HIT_SET: index 0 - приём MIDI, 1 - передача MIDI, 2 - объёмный звук, -1 - закрыть */
+/* HIT_SET: index 0 - приём MIDI, 1 - передача MIDI, 2 - объёмный звук, 3 - dreamy-звук, -1 - закрыть */
 
 #define TRANSPOSE_MIN (-6)
 #define TRANSPOSE_MAX 6

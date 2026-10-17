@@ -394,7 +394,7 @@ static int make_set_panel(Sprite *sp) {
     if (!sprite_alloc(sp, bb, 12)) return 0;
     SdfRRect r = { SET_X - sp->x, SET_Y - sp->y, SET_W, SET_H, 26 };
     bevel(&sp->cv, sdf_rrect, &r, box_shift(bb, -sp->x, -sp->y), &SK_CREAM, 6.0f);
-    for (int k = 0; k < 3; k++) {
+    for (int k = 0; k < SET_ROWS; k++) {
         float cy = SET_ROW_Y0 + k * SET_ROW_DY;
         SdfRRect row = { SET_X + 24 - sp->x, cy - 28 - sp->y, SET_W - 48, 56, 28 };
         Box br = { row.x, row.y, row.x + row.w, row.y + row.h };
@@ -1102,6 +1102,16 @@ static void draw_plate(void) {
             plate_span(br, BULB_X1 - 30.0f, BAR_X1 + 1.0f, 55);
         }
     draw_fluid();
+    if (g_st.mode == MODE_PADONLY) {               /* Pad only: панель - кнопка вкл/выкл пэда */
+        int on = g_st.chord_on && !g_st.pad_off;
+        float cx = PLATE_X + PLATE_W * 0.5f, cy = PLATE_Y + PLATE_H * 0.5f;
+        if (!on) vita2d_draw_rectangle(PLATE_X + 18, PLATE_Y + 18, PLATE_W - 36, PLATE_H - 36, RGBA8(30, 46, 62, 150));
+        vita2d_draw_rectangle(cx - 150, cy - 46, 300, 92, RGBA8(36, 56, 76, on ? 170 : 210));
+        text_c(cx, cy - 14, on ? C_OR_TOP : C_LCD_TEXT, 1.5f,
+               !g_st.chord_on ? "PAD ONLY" : (on ? "PAD ON" : "PAD OFF"), 1);
+        text_c(cx, cy + 22, C_LCD_DIM, 0.7f,
+               !g_st.chord_on ? "choose a chord on the wheel" : (on ? "pad only - tap to stop" : "pad only - tap to play"), 0);
+    }
 }
 
 /* тональность: ступень тоники кнопки или -1 (не из лада / тональность выключена) */
@@ -1168,11 +1178,11 @@ static void draw_header(const UiDebug *dbg) {
     }
 
     /* MODE */
-    static const char *MODE_NAME[N_MODES] = { "Strum", "Pad", "Guitar" };
-    static const int MODE_X[N_MODES] = { RADIO_STRUM_X, RADIO_PAD_X, RADIO_GTR_X };
+    static const char *MODE_NAME[3] = { "Strum", "Pad", "Guitar" };
+    static const int MODE_X[3] = { RADIO_STRUM_X, RADIO_PAD_X, RADIO_GTR_X };
     text_spaced(256, 27, C_NAVY, 0.6f, 1.5f, "MODE", 1);
-    for (int m = 0; m < N_MODES; m++) {
-        draw_sprite(&g_led[g_st.mode == m], MODE_X[m], RADIO_Y, 0);
+    for (int m = 0; m < 3; m++) {                 /* три кнопки: Pad горит и в Pad only */
+        draw_sprite(&g_led[g_st.mode == m || (m == MODE_PAD && g_st.mode == MODE_PADONLY)], MODE_X[m], RADIO_Y, 0);
         text_at(MODE_X[m] + 11, RADIO_Y + 6, C_NAVY, 0.76f, MODE_NAME[m], 0);
     }
 
@@ -1224,7 +1234,7 @@ static void draw_header(const UiDebug *dbg) {
 
     /* громкость: в Pad - пэда, в остальных режимах - струн */
     /* громкость пэда (баланс пэда и струн) - только в Pad; в других режимах ручки нет */
-    int pad = g_st.mode == MODE_PAD;
+    int pad = mode_pad(g_st.mode);
     text_spaced(VOL_X + 16, VOL_Y + 15, pad ? C_NAVY : RGBA8(170, 156, 134, 255), 0.5f, 1.3f, "PAD VOL", 1);
     if (pad) {
         float kx = VOL_TX0 + (VOL_TX1 - VOL_TX0) * (float)g_st.vol_pad / 100.0f;
@@ -1333,7 +1343,7 @@ int ui_hit(float x, float y, int *index) {
         *index = -1;
         if (x < SET_X || x > SET_X + SET_W || y < SET_Y || y > SET_Y + SET_H) return HIT_SET;   /* мимо - закрыть */
         if (x > SET_X + SET_W - 70 && y < SET_Y + 64) return HIT_SET;
-        for (int k = 0; k < 3; k++) {
+        for (int k = 0; k < SET_ROWS; k++) {
             float cy = SET_ROW_Y0 + k * SET_ROW_DY;
             if (fabsf(y - cy) <= 30.0f && x >= SET_X + 20 && x <= SET_X + SET_W - 20) { *index = k; return HIT_SET; }
         }
@@ -1354,7 +1364,7 @@ int ui_hit(float x, float y, int *index) {
     /* табло: включить / выключить тональность */
     if (x >= LCD_X && x <= LCD_X + LCD_W && y >= LCD_Y - 4 && y <= LCD_Y + LCD_H + 6) return HIT_KEY;
     /* громкость: вся капсула, значение - по положению пальца на дорожке */
-    if (g_st.mode == MODE_PAD && x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
+    if (mode_pad(g_st.mode) && x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
         float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
         *index = v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
         return HIT_VOL;
@@ -1399,12 +1409,13 @@ static void draw_settings(void) {
     draw_sprite(&g_set_panel, 0, 0, 0);
     text_spaced(SET_X + 34, SET_Y + 40, C_NAVY, 0.95f, 4.0f, "SETTINGS", 1);
     text_c(SET_X + SET_W - 34, SET_Y + 32, is_held(HIT_SET, -1) ? C_ORANGE : C_NAVY, 1.3f, "x", 1);
-    static const char *TITLE[3] = { "MIDI IN  (USB)", "MIDI OUT  (USB)", "WIDE SOUND" };
-    static const char *HINT[3] = { "notes from computer - chromatic strings (no chord)",
-                                   "Strum notes go to computer, channel 1",
-                                   "right channel 10 ms later - wider, more space" };
-    int val[3] = { g_st.midi_rx, g_st.midi_tx, g_st.wide };
-    for (int k = 0; k < 3; k++) {
+    static const char *TITLE[SET_ROWS] = { "MIDI IN  (USB)", "MIDI OUT  (USB)", "WIDE SOUND", "DREAMY SOUND" };
+    static const char *HINT[SET_ROWS] = { "notes from computer - chromatic strings (no chord)",
+                                          "strings & guitar - channel 1, pad - channel 2",
+                                          "right channel 10 ms later - wider, more space",
+                                          "strings: kalimba / vibes / e-piano, tremolo + reverb" };
+    int val[SET_ROWS] = { g_st.midi_rx, g_st.midi_tx, g_st.wide, g_st.sound };
+    for (int k = 0; k < SET_ROWS; k++) {
         float cy = SET_ROW_Y0 + k * SET_ROW_DY;
         draw_sprite(&g_chk[val[k] ? 1 : 0], SET_CHK_X, cy, is_held(HIT_SET, k));
         text_at(SET_CHK_X + 34, cy - 3, C_NAVY, 1.0f, TITLE[k], 1);

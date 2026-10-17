@@ -12,7 +12,7 @@
  * Задняя панель: под правой рукой - ладонь на струнах (звенящее гаснет, удары короткие и глухие),
  * под левой - сустейн (струны и пэд звучат дольше, но не бесконечно; гитара не глушит струны при смене аккорда).
  * Быстрые аккорды (8 штук, видны в углах слева от колеса):
- *   D-pad / левый стик - вызвать; SELECT + D-pad / SELECT + стик - сохранить текущий вместе с октавой
+ *   D-pad / левый стик - вызвать; START + D-pad / START + стик - сохранить текущий вместе с октавой
  *   (без аккорда - очистить).
  *   Можно и просто коснуться "кнопки" быстрого аккорда.
  * Справа (Strum, Pad) 25 клавиш C4..C6, каждая переходит в свою струну. Без аккорда - хроматика,
@@ -90,6 +90,16 @@ static float g_play_t = -10.0f;      /* когда последний раз п�
  * табло, громкость) не срабатывают, пока палец на струнах и ещё PLAY_GUARD_S после. */
 #define PLAY_GUARD_S 0.7f
 static float g_vel = 0.75f;           /* сила текущего удара (гитара) */
+static int g_gmidi[N_GSTR] = { -1, -1, -1, -1, -1, -1 };   /* какая нота каждой гитарной струны ушла по MIDI */
+static int g_mpad[MAX_CHORD], g_mpad_n = 0;                /* ноты пэда, отправленные по MIDI */
+static uint32_t g_rnd = 12345u;
+/* небольшой разброс силы удара от струны к струне (как у живой руки): +-7% */
+static float vel_spread(float v) {
+    g_rnd = g_rnd * 1664525u + 1013904223u;
+    float r = (float)(g_rnd >> 9) / (float)(1u << 23) * 2.0f - 1.0f;
+    v *= 1.0f + 0.07f * r;
+    return v < 0.05f ? 0.05f : (v > 1.0f ? 1.0f : v);
+}
 
 /* касания кнопок: пока палец лежит, кнопка выглядит нажатой */
 typedef struct { int id, kind, idx; } Held;
@@ -103,7 +113,7 @@ static int base_note(void) { return STRING_BASE_NOTE + 12 * st.octave; }
 /* ---------- настройки: режим, октава, громкость, быстрые аккорды ---------- */
 #define SET_MAGIC 0x53545231u          /* "STR1" */
 typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos, transpose,
-                 midi_rx, midi_tx, wide; } Settings;
+                 midi_rx, midi_tx, wide, sound; } Settings;
 static int set_dirty = 0;
 static uint64_t set_dirty_t = 0;
 
@@ -133,6 +143,7 @@ static void settings_load(void) {
         st.midi_tx = s.midi_tx ? 1 : 0;
         st.wide = s.wide ? 1 : 0;
     }
+    if (n >= offsetof(Settings, sound) + sizeof(int)) st.sound = s.sound ? 1 : 0;
 }
 
 static void settings_save(void) {
@@ -142,7 +153,7 @@ static void settings_save(void) {
     s.mode = st.mode; s.octave = st.octave; s.vol_strings = st.vol_strings; s.vol_pad = st.vol_pad;
     for (int k = 0; k < QS_N; k++) s.quick[k] = st.quick[k];
     s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor; s.gpos = st.gpos; s.transpose = st.transpose;
-    s.midi_rx = st.midi_rx; s.midi_tx = st.midi_tx; s.wide = st.wide;
+    s.midi_rx = st.midi_rx; s.midi_tx = st.midi_tx; s.wide = st.wide; s.sound = st.sound;
     FILE *f = fopen(SET_TMP, "wb");             /* сначала во временный файл - сбой не испортит старый */
     if (!f) return;
     size_t n = fwrite(&s, 1, sizeof(s), f);
@@ -156,9 +167,25 @@ static void settings_touch(void) { set_dirty = 1; set_dirty_t = sceKernelGetProc
 
 static void send_pad(void) {
     int notes[MAX_CHORD], n = 0;
-    if (st.mode == MODE_PAD && st.chord_on) {
+    if (mode_pad(st.mode) && st.chord_on && !(st.mode == MODE_PADONLY && st.pad_off)) {
         n = pad_voicing(st.root, chord_type(st.minor, st.mod), notes);
         for (int i = 0; i < n; i++) notes[i] += 12 * st.octave + st.transpose;
+    }
+    /* MIDI: пэд - на канале 2, держится, пока звучит; сила - от громкости пэда */
+    {
+        int vel = 1 + st.vol_pad * 126 / 100, mn = st.midi_tx ? n : 0;
+        for (int i = 0; i < g_mpad_n; i++) {
+            int keep = 0;
+            for (int k = 0; k < mn; k++) if (notes[k] == g_mpad[i]) keep = 1;
+            if (!keep) midi_off(MIDI_CH_PAD, g_mpad[i]);
+        }
+        for (int k = 0; k < mn; k++) {
+            int had = 0;
+            for (int i = 0; i < g_mpad_n; i++) if (notes[k] == g_mpad[i]) had = 1;
+            if (!had) midi_note(MIDI_CH_PAD, notes[k], vel, MIDI_HOLD);
+        }
+        memcpy(g_mpad, notes, sizeof(int) * mn);
+        g_mpad_n = mn;
     }
     if (n == pad_sent_n && memcmp(notes, pad_sent, sizeof(int) * n) == 0) return;
     audio_pad(notes, n);
@@ -175,7 +202,11 @@ static void build_guitar(void) {
     if (gch_valid && guitar()) {
         int mask = 0;
         for (int s = 0; s < N_GSTR; s++) if (ng.note[s] != gch.note[s]) mask |= 1 << s;
-        if (mask && !st.sus) audio_guitar_damp(mask);   /* с сустейном старые ноты звенят дальше */
+        if (mask && !st.sus) {
+            audio_guitar_damp(mask);                    /* с сустейном старые ноты звенят дальше */
+            for (int s = 0; s < N_GSTR; s++)
+                if ((mask >> s) & 1) { midi_off(MIDI_CH_STR, g_gmidi[s]); g_gmidi[s] = -1; }
+        }
     }
     gch = ng;
     gch_valid = 1;
@@ -204,15 +235,24 @@ static void on_strum(int zone, float frac, void *user) {
     int delay = (int)(frac * g_frame_dt * (float)SYNTH_RATE);
     if (guitar()) {
         int s = zone;
-        if (gch.note[s] >= 0) audio_guitar(s, gch.note[s], gch.fret[s], 0, g_vel, delay);
-        else audio_guitar(s, GT_TUNING[s] + 12 * st.octave + st.transpose, 0, 1, g_vel, delay);   /* заглушённая - глухой стук */
+        float vel = vel_spread(g_vel);
+        if (gch.note[s] >= 0) {
+            audio_guitar(s, gch.note[s], gch.fret[s], 0, vel, delay);
+            /* MIDI: на струне одна нота - прежняя гаснет; звенит, пока не заглушили */
+            if (st.midi_tx) {
+                if (g_gmidi[s] >= 0 && g_gmidi[s] != gch.note[s]) midi_off(MIDI_CH_STR, g_gmidi[s]);
+                midi_note(MIDI_CH_STR, gch.note[s], (int)(vel * 127.0f), st.palm ? 0.2f : (st.sus ? 12.0f : 6.0f));
+                g_gmidi[s] = gch.note[s];
+            }
+        }
+        else audio_guitar(s, GT_TUNING[s] + 12 * st.octave + st.transpose, 0, 1, vel, delay);   /* заглушённая - глухой стук */
         return;
     }
     int note = smap.zone_note[zone] + st.transpose;
     audio_strum(note, delay);
     /* передача по USB: в Strum каждый удар - нота на компьютер (длина - как звучит у нас) */
-    if (st.mode == MODE_STRUM && st.midi_tx)
-        midi_note(note, (int)(g_vel * 127.0f), st.palm ? 0.12f : (st.sus ? 2.5f : 0.9f));
+    if (st.midi_tx)                            /* Strum и струны в Pad */
+        midi_note(MIDI_CH_STR, note, (int)(g_vel * 127.0f), st.palm ? 0.12f : (st.sus ? 2.5f : 0.9f));
 }
 
 /* приём по USB: ноты с компьютера звучат на струнах - пока только в хроматике (без аккорда и лада) */
@@ -267,7 +307,7 @@ static void set_mode(int m) {
 static void set_volume_x(float x) {
     float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
     int iv = v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
-    if (st.mode != MODE_PAD) return;               /* ручка громкости есть только в Pad */
+    if (!mode_pad(st.mode)) return;                /* ручка громкости есть только в Pad */
     int *dst = &st.vol_pad;
     if (*dst == iv) return;
     *dst = iv;
@@ -323,7 +363,13 @@ static int touch_down_ui(int kind, int idx, float x) {
         else if (idx == 0) st.midi_rx = !st.midi_rx;
         else if (idx == 1) st.midi_tx = !st.midi_tx;
         else if (idx == 2) { st.wide = !st.wide; audio_wide(st.wide); }
-        if (idx == 0 || idx == 1) { midi_set(st.midi_rx, st.midi_tx); st.midi_state = midi_state(); }
+        else if (idx == 3) { st.sound = !st.sound; audio_sound(st.sound); }
+        if (idx == 0 || idx == 1) {
+            midi_set(st.midi_rx, st.midi_tx);
+            st.midi_state = midi_state();
+            g_mpad_n = 0;                       /* пэд перешлём заново (send_pad в apply_state) */
+            for (int s = 0; s < N_GSTR; s++) g_gmidi[s] = -1;
+        }
         if (idx >= 0) settings_touch();
         break;
     case HIT_GPOS:                              /* позиция на грифе; повторное касание - снова авто */
@@ -335,7 +381,10 @@ static int touch_down_ui(int kind, int idx, float x) {
         break;
     case HIT_MOD:    st.mod = idx; break;
     case HIT_QUAL:   st.minor = idx; break;
-    case HIT_MODE:   set_mode(idx); break;
+    case HIT_MODE:                              /* повторное касание Pad - Pad / Pad only */
+        if (idx == MODE_PAD && mode_pad(st.mode)) idx = st.mode == MODE_PAD ? MODE_PADONLY : MODE_PAD;
+        set_mode(idx);
+        break;
     case HIT_OCT:    octave_step(idx); break;
     case HIT_TRN:    transpose_step(idx); break;
     case HIT_VOL:    set_volume_x(x); return 1;
@@ -357,7 +406,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9.7");
+    dbg_log("start v0.9.8");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));
@@ -376,6 +425,7 @@ int main(void) {
     dbg_log("audio_start=%d grain=%d", ar, AUDIO_GRAIN);
     audio_volume(st.vol_strings, st.vol_pad);
     audio_wide(st.wide);
+    audio_sound(st.sound);
     if (st.midi_rx || st.midi_tx) midi_set(st.midi_rx, st.midi_tx);   /* как было при выходе */
     apply_state();
 
@@ -391,7 +441,7 @@ int main(void) {
     uint64_t last_sys = sceKernelGetSystemTimeWide();
     float fps = 60.0f;
     int show_debug = 0;
-    int sel_combo = 0;                 /* пока зажат SELECT, им сохраняли аккорд - режим не переключать */
+    int sel_combo = 0;                 /* пока зажат START, им сохраняли аккорд - отладку не переключать */
     int stick = -1;
 
     for (;;) {
@@ -419,10 +469,11 @@ int main(void) {
         sceCtrlPeekBufferPositive(0, &pad, 1);
         unsigned pressed = pad.buttons & ~prev_buttons, released = prev_buttons & ~pad.buttons;
         prev_buttons = pad.buttons;
-        int sel = (pad.buttons & SCE_CTRL_SELECT) != 0;
-        if (pressed & SCE_CTRL_SELECT) sel_combo = 0;
+        /* сохранение быстрых аккордов - с START (SELECT теперь только режим) */
+        int sel = (pad.buttons & SCE_CTRL_START) != 0;
+        if (pressed & SCE_CTRL_START) sel_combo = 0;
 
-        /* D-pad: вызвать / с SELECT - сохранить быстрый аккорд 0..3 */
+        /* D-pad: вызвать / с START - сохранить быстрый аккорд 0..3 */
         static const unsigned DPAD[4] = { SCE_CTRL_UP, SCE_CTRL_RIGHT, SCE_CTRL_DOWN, SCE_CTRL_LEFT };
         for (int d = 0; d < 4; d++)
             if (pressed & DPAD[d]) {
@@ -437,13 +488,17 @@ int main(void) {
         }
         stick = sd;
 
-        if ((released & SCE_CTRL_SELECT) && !sel_combo) { set_mode((st.mode + 1) % N_MODES); apply_state(); }
+        if (pressed & SCE_CTRL_SELECT) {          /* по кругу: Strum -> Pad -> Pad only -> Guitar */
+            static const int NEXT[N_MODES] = { MODE_PAD, MODE_PADONLY, MODE_STRUM, MODE_GUITAR };
+            set_mode(NEXT[st.mode]);
+            apply_state();
+        }
         if ((pressed & SCE_CTRL_CIRCLE) && st.settings) { st.settings = 0; apply_state(); }
         else if (pressed & SCE_CTRL_CIRCLE) { st.chord_on = 0; apply_state(); }
         if (pressed & SCE_CTRL_TRIANGLE) { key_toggle(); apply_state(); }
         if (pressed & SCE_CTRL_LTRIGGER) { octave_step(-1); apply_state(); }
         if (pressed & SCE_CTRL_RTRIGGER) { octave_step(1); apply_state(); }
-        if (pressed & SCE_CTRL_START)    show_debug = !show_debug;
+        if ((released & SCE_CTRL_START) && !sel_combo) show_debug = !show_debug;   /* короткий START - отладка */
 
         /* ---- задняя панель: справа - ладонь на струнах, слева - сустейн ----
          * Самые края не считаются: там лежат пальцы, которыми держат консоль. */
@@ -479,7 +534,11 @@ int main(void) {
                 /* сила удара: быстрее проведение - громче и ярче (струн в секунду) */
                 float speed = fabsf(p - f->pos) / dt;
                 float v = speed / (guitar() ? 30.0f : 120.0f);
-                g_vel = 0.45f + 0.55f * (v > 1.0f ? 1.0f : v);
+                if (v > 1.0f) v = 1.0f;
+                if (guitar()) {                 /* гитара: шире разброс (медленно - тихо), сглажено по кадрам */
+                    float t = 0.3f + 0.7f * v;
+                    g_vel += (t - g_vel) * 0.6f;
+                } else g_vel = 0.45f + 0.55f * v;
                 if (guitar()) strum_gtr_move(f, x, y, on_strum, NULL);       /* каждое пересечение струны */
                 else strum_move_xy(f, x, y, cur_map(), on_strum, NULL);    /* хитбоксы клавиш */
                 ui_touch_glow(f->x, f->y, x, y, 0);
@@ -494,7 +553,10 @@ int main(void) {
             int top = kind == HIT_MODE || kind == HIT_OCT || kind == HIT_TRN || kind == HIT_VOL || kind == HIT_KEY
                    || kind == HIT_LOGO;
             if (top && g_now - g_play_t < PLAY_GUARD_S) continue;     /* играют - верхние кнопки спят */
-            if (kind == HIT_PLATE) {
+            if (kind == HIT_PLATE && st.mode == MODE_PADONLY) {   /* панель - кнопка вкл/выкл пэда */
+                st.pad_off = !st.pad_off;
+                apply_state();
+            } else if (kind == HIT_PLATE) {
                 g_play_t = g_now;
                 StrumFinger *fr = finger_find(-1);
                 if (fr) {
