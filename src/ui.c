@@ -1162,11 +1162,14 @@ static void draw_header(const UiDebug *dbg) {
     }
 
     /* громкость: в Pad - пэда, в остальных режимах - струн */
-    int vol = g_st.mode == MODE_PAD ? g_st.vol_pad : g_st.vol_strings;
-    text_spaced(VOL_X + 16, VOL_Y + 15, C_NAVY, 0.5f, 1.3f, g_st.mode == MODE_PAD ? "PAD VOL" : "VOLUME", 1);
-    float kx = VOL_TX0 + (VOL_TX1 - VOL_TX0) * (float)vol / 100.0f;
-    vita2d_draw_rectangle(VOL_TX0 - 1, VOL_TY - 2, kx - VOL_TX0 + 1, 4, C_ORANGE);
-    draw_sprite(&g_knob, kx, VOL_TY, is_held(HIT_VOL, 0));
+    /* громкость пэда (баланс пэда и струн) - только в Pad; в других режимах ручки нет */
+    int pad = g_st.mode == MODE_PAD;
+    text_spaced(VOL_X + 16, VOL_Y + 15, pad ? C_NAVY : RGBA8(170, 156, 134, 255), 0.5f, 1.3f, "PAD VOL", 1);
+    if (pad) {
+        float kx = VOL_TX0 + (VOL_TX1 - VOL_TX0) * (float)g_st.vol_pad / 100.0f;
+        vita2d_draw_rectangle(VOL_TX0 - 1, VOL_TY - 2, kx - VOL_TX0 + 1, 4, C_ORANGE);
+        draw_sprite(&g_knob, kx, VOL_TY, is_held(HIT_VOL, 0));
+    }
 }
 
 /* быстрые аккорды: название на "кнопке", выбранный - оранжевый */
@@ -1244,18 +1247,14 @@ void ui_touch_glow(float x0, float y0, float x1, float y1, int down) {
         fluid_feed(strum_key_at(x1, y1), x1, 0.7f);
         return;
     }
-    float p0 = gtr_pos_from_y(y0), p1 = gtr_pos_from_y(y1);
-    int s0 = (int)p0, s1 = (int)p1;
+    int s1 = (int)gtr_pos_from_y(y1);
     if (down) fluid_hit(s1, x1, 1.0f);                      /* касание: удар по струне под пальцем */
-    /* все струны, через которые палец прошёл за кадр, загораются одинаково - без "зебры" */
-    if (s0 != s1) {
-        int step = s1 > s0 ? 1 : -1;
-        for (int s = s0 + step;; s += step) {
-            float t = (((float)s + (step > 0 ? 0.0f : 1.0f)) - p0) / (p1 - p0);   /* где пересёк край струны */
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
+    /* струна загорается, когда палец пересёк её линию (как звучит) - и при тремоло туда-обратно */
+    for (int s = 0; s < N_GSTR; s++) {
+        float c = gtr_string_y(s);
+        if ((y0 - c) * (y1 - c) < 0.0f) {
+            float t = (c - y0) / (y1 - y0);
             fluid_hit(s, x0 + (x1 - x0) * t, 1.0f);
-            if (s == s1) break;
         }
     }
     fluid_feed(s1, x1, 0.7f);                               /* палец на струне подпитывает каплю */
@@ -1276,7 +1275,7 @@ int ui_hit(float x, float y, int *index) {
     /* табло: включить / выключить тональность */
     if (x >= LCD_X && x <= LCD_X + LCD_W && y >= LCD_Y - 4 && y <= LCD_Y + LCD_H + 6) return HIT_KEY;
     /* громкость: вся капсула, значение - по положению пальца на дорожке */
-    if (x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
+    if (g_st.mode == MODE_PAD && x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
         float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
         *index = v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
         return HIT_VOL;

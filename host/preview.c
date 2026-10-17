@@ -60,14 +60,15 @@ static void run(const char *prefix, Path path, int touch_frames, int frames_tota
             float x, y;
             path(fr, &x, &y);
             float p = pos_of(x, y);
+            (void)p;
             int gtr = g_mode == MODE_GUITAR;
             if (fr == 0) {
                 f.x = x; f.y = y;
-                if (gtr) strum_down(&f, 1, p, map_of(), on_hit, NULL);
+                if (gtr) strum_gtr_down(&f, 1, x, y, on_hit, NULL);
                 else strum_down_xy(&f, 1, x, y, map_of(), on_hit, NULL);
                 ui_touch_glow(x, y, x, y, 1);
             } else {
-                if (gtr) strum_move(&f, p, map_of(), on_hit, NULL);
+                if (gtr) strum_gtr_move(&f, x, y, on_hit, NULL);
                 else strum_move_xy(&f, x, y, map_of(), on_hit, NULL);
                 ui_touch_glow(f.x, f.y, x, y, 0);
                 f.x = x; f.y = y;

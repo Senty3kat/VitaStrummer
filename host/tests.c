@@ -104,6 +104,38 @@ static void test_strum(void) {
     CHECK(nhits == m.nzones);
 }
 
+/* гитара: тремоло - каждое пересечение линии струны звучит, дрожание у линии - нет */
+static int g_ghits[16], g_gn;
+static void gtr_hit(int zone, float frac, void *u) { (void)frac; (void)u; if (g_gn < 16) g_ghits[g_gn++] = zone; }
+static void test_gtr_tremolo(void) {
+    StrumFinger f;
+    memset(&f, 0, sizeof(f));
+    float c = gtr_string_y(2), x = 800.0f, y = c - 12.0f;     /* над третьей струной, в её полосе */
+    g_gn = 0;
+    f.x = x; f.y = y;
+    strum_gtr_down(&f, 1, x, y, gtr_hit, NULL);
+    CHECK(g_gn == 1 && g_ghits[0] == 2);                        /* касание - струна под пальцем */
+    /* сразу вниз через линию - это тот же удар, второго звука нет */
+    float path[] = { c + 10.0f, c - 10.0f, c + 10.0f, c - 10.0f, c + 10.0f };
+    for (int i = 0; i < 5; i++) { strum_gtr_move(&f, x, path[i], gtr_hit, NULL); f.y = path[i]; }
+    for (int k = 0; k < 4; k++) { strum_gtr_move(&f, x, f.y, gtr_hit, NULL); }   /* постоять */
+    printf("tremolo: %d hits\n", g_gn);
+    CHECK(g_gn >= 4);                                           /* туда-обратно на 20 px - удар каждый раз */
+    for (int i = 0; i < g_gn; i++) CHECK(g_ghits[i] == 2);
+    int n0 = g_gn;
+    float jit[] = { c + 7.0f, c + 3.0f, c + 6.0f, c + 2.0f, c + 8.0f };   /* дрожание у линии */
+    for (int i = 0; i < 5; i++) { strum_gtr_move(&f, x, jit[i], gtr_hit, NULL); f.y = jit[i]; }
+    CHECK(g_gn == n0);
+    /* проведение через все струны - каждая по разу, по порядку */
+    g_gn = 0;
+    f.y = gtr_string_y(0) + 20.0f;
+    strum_gtr_move(&f, x, f.y, gtr_hit, NULL);
+    g_gn = 0;
+    strum_gtr_move(&f, x, gtr_string_y(5) - 20.0f, gtr_hit, NULL);
+    CHECK(g_gn == 6);
+    for (int i = 0; i < g_gn; i++) CHECK(g_ghits[i] == i);
+}
+
 /* быстрые аккорды: код с октавой и позицией на грифе; старые коды - октава 0, позиция авто */
 static void test_quick(void) {
     for (int gp = 0; gp <= GT_POS_MAX; gp++)
@@ -438,6 +470,7 @@ int main(void) {
     test_strum();
     test_keys();
     test_quick();
+    test_gtr_tremolo();
     test_guitar();
     test_key();
     test_guitar_sound();

@@ -222,6 +222,47 @@ void strum_move_xy(StrumFinger *f, float x, float y, const StringMap *m, StrumHi
     f->pos = strum_pos_from_xy(x, y);
 }
 
+/* ---- гитара: пересечение линии струны ---- */
+static int gtr_side(int i, float y) {
+    float c = gtr_string_y(i);
+    return y > c + GTR_LINE_HYST ? 1 : (y < c - GTR_LINE_HYST ? -1 : 0);
+}
+
+void strum_gtr_down(StrumFinger *f, int id, float x, float y, StrumHit hit, void *user) {
+    (void)x;
+    f->id = id;
+    f->pos = gtr_pos_from_y(y);
+    int s = (int)f->pos;
+    for (int i = 0; i < N_GSTR; i++) f->gside[i] = (signed char)gtr_side(i, y);
+    f->zone = s;
+    f->gfresh = 4;                       /* ~65 мс: удар касанием уже прозвучал */
+    f->gfresh_s = s;
+    hit(s, 0.0f, user);
+}
+
+void strum_gtr_move(StrumFinger *f, float x, float y, StrumHit hit, void *user) {
+    (void)x;
+    float y0 = f->y;
+    int ns = 0, order[N_GSTR];
+    float fr[N_GSTR];
+    for (int i = 0; i < N_GSTR; i++) {
+        int sd = gtr_side(i, y);
+        if (sd == 0) continue;           /* на линии - сторону не меняем */
+        int was = f->gside[i];
+        f->gside[i] = (signed char)sd;
+        if (was == 0 || was == sd) continue;
+        if (f->gfresh > 0 && i == f->gfresh_s) { f->gfresh = 0; continue; }   /* продолжение удара касанием - один раз */
+        float c = gtr_string_y(i), t = (y != y0) ? (c - y0) / (y - y0) : 1.0f;
+        int k = ns++;
+        while (k > 0 && fr[k - 1] > t) { fr[k] = fr[k - 1]; order[k] = order[k - 1]; k--; }
+        fr[k] = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        order[k] = i;
+    }
+    if (f->gfresh > 0) f->gfresh--;
+    for (int k = 0; k < ns; k++) { f->zone = order[k]; hit(order[k], fr[k], user); }
+    f->pos = gtr_pos_from_y(y);
+}
+
 float gtr_pitch(void) { return (float)(GT_BOTTOM - GT_TOP) / (float)N_GSTR; }
 float gtr_string_y(int i) { return (float)GT_BOTTOM - ((float)i + 0.5f) * gtr_pitch(); }   /* 0 - толстая, внизу */
 float gtr_thick(int i) {

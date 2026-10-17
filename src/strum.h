@@ -34,6 +34,8 @@ typedef struct {
     float pos;
     float x, y;      /* последняя экранная точка (для подсветки от точки касания) */
     int key;         /* клавиша (струна) под пальцем - для хитбоксов клавиш */
+    signed char gside[8];   /* гитара: с какой стороны линии каждой струны палец (-1 выше, +1 ниже, 0 на линии) */
+    int gfresh, gfresh_s;   /* гитара: струна от касания - её первое пересечение в ближайшие кадры не звучит */
     int zone;
 } StrumFinger;
 
@@ -46,6 +48,11 @@ void strum_move(StrumFinger *f, float pos, const StringMap *m, StrumHit hit, voi
 void strum_down_xy(StrumFinger *f, int id, float x, float y, const StringMap *m, StrumHit hit, void *user);
 void strum_move_xy(StrumFinger *f, float x, float y, const StringMap *m, StrumHit hit, void *user);
 int  strum_key_at(float x, float y);
+/* гитара: струна звучит при каждом пересечении её линии пальцем (вниз и вверх) - тремоло
+ * коротким движением через одну струну. Касание - струна под пальцем. */
+#define GTR_LINE_HYST 4.0f       /* "мёртвая" полоса у линии струны (px), чтобы дрожание пальца не играло */
+void strum_gtr_down(StrumFinger *f, int id, float x, float y, StrumHit hit, void *user);
+void strum_gtr_move(StrumFinger *f, float x, float y, StrumHit hit, void *user);
 int  strum_key_kind(float x);            /* 2 - только чёрные (слева), 1 - только белые, 0 - все */
 /* клавиши, задетые по пути (с гистерезисом; в зоне только чёрных/белых другие пропускаются) */
 int  strum_cross(int *cur, float x0, float y0, float x1, float y1, int *keys, float *fracs, int max);

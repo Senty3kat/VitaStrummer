@@ -83,6 +83,11 @@ static int gch_valid = 0;
 static StrumFinger fingers[MAX_FINGERS];
 static int pad_sent[MAX_CHORD], pad_sent_n = -1;
 static float g_frame_dt = 1.0f / 60.0f;
+static float g_now = 0.0f;           /* секунды с запуска */
+static float g_play_t = -10.0f;      /* когда последний раз палец был на струнах */
+/* Защита от случайных касаний во время игры: кнопки верхней полосы (режим, октава, транспозиция,
+ * табло, громкость) не срабатывают, пока палец на струнах и ещё PLAY_GUARD_S после. */
+#define PLAY_GUARD_S 0.7f
 static float g_vel = 0.75f;           /* сила текущего удара (гитара) */
 
 /* касания кнопок: пока палец лежит, кнопка выглядит нажатой */
@@ -111,7 +116,7 @@ static void settings_load(void) {
     if (n < offsetof(Settings, gpos) || s.magic != SET_MAGIC || s.size != n) return;
     if (s.mode >= 0 && s.mode < N_MODES) st.mode = s.mode;
     if (s.octave >= OCT_MIN && s.octave <= OCT_MAX) st.octave = s.octave;
-    if (s.vol_strings >= 0 && s.vol_strings <= 100) st.vol_strings = s.vol_strings;
+    /* громкость струн больше не регулируется (автору нужен только баланс в Pad) - всегда 70 */
     if (s.vol_pad >= 0 && s.vol_pad <= 100) st.vol_pad = s.vol_pad;
     for (int k = 0; k < QS_N; k++)
         if (s.quick[k] >= 0 && s.quick[k] <= QUICK_MAX) st.quick[k] = s.quick[k];
@@ -239,7 +244,8 @@ static void set_mode(int m) {
 static void set_volume_x(float x) {
     float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
     int iv = v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
-    int *dst = st.mode == MODE_PAD ? &st.vol_pad : &st.vol_strings;
+    if (st.mode != MODE_PAD) return;               /* ручка громкости есть только в Pad */
+    int *dst = &st.vol_pad;
     if (*dst == iv) return;
     *dst = iv;
     audio_volume(st.vol_strings, st.vol_pad);
@@ -319,7 +325,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9.2");
+    dbg_log("start v0.9.3");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));
@@ -362,6 +368,7 @@ int main(void) {
         if (dt < 0.001f) dt = 0.001f;
         if (dt > 0.1f) dt = 0.1f;
         g_frame_dt = dt > 1.0f / 30.0f ? 1.0f / 30.0f : dt;
+        g_now += dt;
         fps += (1.0f / dt - fps) * 0.05f;
 
         /* ---- возврат из "сна": порт звука и текстуры заново ---- */
@@ -432,12 +439,13 @@ int main(void) {
 
             StrumFinger *f = finger_find(id);
             if (f) {
+                g_play_t = g_now;
                 float p = finger_pos(x, y);
                 /* сила удара: быстрее проведение - громче и ярче (струн в секунду) */
                 float speed = fabsf(p - f->pos) / dt;
                 float v = speed / (guitar() ? 30.0f : 120.0f);
                 g_vel = 0.45f + 0.55f * (v > 1.0f ? 1.0f : v);
-                if (guitar()) strum_move(f, p, cur_map(), on_strum, NULL);
+                if (guitar()) strum_gtr_move(f, x, y, on_strum, NULL);       /* каждое пересечение струны */
                 else strum_move_xy(f, x, y, cur_map(), on_strum, NULL);    /* хитбоксы клавиш */
                 ui_touch_glow(f->x, f->y, x, y, 0);
                 f->x = x; f->y = y;
@@ -448,12 +456,15 @@ int main(void) {
             if (!is_new) continue;
 
             int idx, kind = ui_hit(x, y, &idx);
+            int top = kind == HIT_MODE || kind == HIT_OCT || kind == HIT_TRN || kind == HIT_VOL || kind == HIT_KEY;
+            if (top && g_now - g_play_t < PLAY_GUARD_S) continue;     /* играют - верхние кнопки спят */
             if (kind == HIT_PLATE) {
+                g_play_t = g_now;
                 StrumFinger *fr = finger_find(-1);
                 if (fr) {
                     fr->x = x; fr->y = y;
                     g_vel = 0.75f;
-                    if (guitar()) strum_down(fr, id, finger_pos(x, y), cur_map(), on_strum, NULL);
+                    if (guitar()) strum_gtr_down(fr, id, x, y, on_strum, NULL);
                     else strum_down_xy(fr, id, x, y, cur_map(), on_strum, NULL);
                     ui_touch_glow(x, y, x, y, 1);
                 }
