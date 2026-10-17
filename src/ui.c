@@ -710,7 +710,9 @@ static void create_textures(void) {
 /* ---------- текст (рисует GPU каждый кадр) ---------- */
 static int text_w(float sc, const char *s) { return vita2d_pgf_text_width(g_pgf, sc, s); }
 
+static int g_text_off = 0;                /* под открытыми настройками текст экрана не рисуем */
 static void text_at(float x, float y, uint32_t col, float sc, const char *s, int bold) {
+    if (g_text_off) return;
     vita2d_pgf_draw_text(g_pgf, (int)x, (int)y, col, sc, s);
     if (bold) vita2d_pgf_draw_text(g_pgf, (int)x + 1, (int)y, col, sc, s);
 }
@@ -1425,9 +1427,11 @@ void ui_draw(float dt, const UiDebug *dbg) {
     vita2d_clear_screen();
     vita2d_draw_texture(g_tex_bg, 0, 0);
     draw_plate();
+    g_text_off = g_st.settings;               /* надписи под меню не просвечивают */
     draw_wheel();
     draw_header(dbg);
     draw_quick();
+    g_text_off = 0;
     if (g_st.settings) draw_settings();
     vita2d_end_drawing();
     vita2d_swap_buffers();
