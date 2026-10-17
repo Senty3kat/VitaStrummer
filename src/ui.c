@@ -771,11 +771,16 @@ static FDrop *fdrop_new(void) {
 static float clampx(float x) { return x < FL_X0 + 2 ? FL_X0 + 2 : (x > FL_X1 - 2 ? FL_X1 - 2 : x); }
 
 /* удар по струне: капля на месте и две, растекающиеся в стороны */
+static int key_lit(int s);
+
 static void fluid_hit(int s, float x, float amt) {
     x = clampx(x);
     FDrop *d;
+    /* клавиша струны подсвечена (нота аккорда) - жидкость сильнее и дальше уходит к клавишам */
+    int lit = key_lit(s);
     d = fdrop_new(); d->s = s; d->x = x; d->v = 0.0f;    d->w = 12.0f; d->amt = amt;         d->feed = 0;
-    d = fdrop_new(); d->s = s; d->x = x; d->v = -FL_SPEED; d->w = 10.0f; d->amt = amt * 0.8f; d->feed = 0;
+    d = fdrop_new(); d->s = s; d->x = x; d->v = -FL_SPEED * (lit ? 1.6f : 1.0f); d->w = 10.0f;
+    d->amt = amt * (lit ? 1.15f : 0.8f); d->feed = 0;
     d = fdrop_new(); d->s = s; d->x = x; d->v = FL_SPEED;  d->w = 10.0f; d->amt = amt * 0.8f; d->feed = 0;
 }
 
@@ -992,8 +997,14 @@ static void draw_guitar(void) {
 
 /* Подсветка клавиш аккорда: тёплый оттенок, тоника чуть ярче; к нити плавно гаснет.
  * Нота клавиши - её место на клавиатуре C4..C6, как на настоящем пианино */
-#define KHL_A_TONE 44
-#define KHL_A_ROOT 74
+#define KHL_A_TONE 72          /* автор просил чуть ярче */
+#define KHL_A_ROOT 112
+/* клавиша струны s подсвечена как нота выбранного аккорда (Strum / Pad) */
+static int key_lit(int s) {
+    if (!g_khl_want || is_guitar() || s < 0 || s >= N_STRINGS) return 0;
+    return (g_khl_want >> ((STRING_BASE_NOTE + s) % 12)) & 1;
+}
+
 static void keys_hl_update(void) {
     if (g_khl_want == g_khl_have) return;
     g_khl_have = g_khl_want;
