@@ -12,7 +12,7 @@ typedef struct {
 } Voice;
 
 /* отложенный удар: kind 0 - струна страммера, 1 - гитарная струна */
-typedef struct { int kind, note, gstr; float vel; uint32_t at; } Pending;
+typedef struct { int kind, note, gstr, fret; float vel; uint32_t at; } Pending;
 
 #define MAX_PENDING 64
 #define ENV_OFF 0.0002f
@@ -43,7 +43,7 @@ static float exp_mul(float tau_s) { return expf(-1.0f / (tau_s * (float)SYNTH_RA
 
 static void guitar_init(void);
 static float guitar_render_sample(void);
-static void guitar_pluck(int s, int note, float vel);
+static void guitar_pluck(int s, int note, float vel, int fret);
 void synth_guitar_damp_tau(int mask, float tau);
 
 void synth_init(void) {
@@ -288,7 +288,7 @@ static void line_tune(KsLine *L, float hz, float damp_c, float t60) {
 }
 
 /* щипок струны s: note < 0 - заглушенная струна (короткий глухой стук открытой нотой) */
-static void guitar_pluck(int s, int note, float vel) {
+static void guitar_pluck(int s, int note, float vel, int fret) {
     if (s < 0 || s >= N_GSTR_SYNTH) return;
     const GStrParam *p = &GP[s];
     int muted = note < 0;
@@ -303,8 +303,16 @@ static void guitar_pluck(int s, int note, float vel) {
     float t60 = muted ? 0.05f : p->t60 * (note < 52 ? 1.0f : 52.0f / (float)note);   /* выше - короче */
     if (g_palm && !muted) t60 = 0.16f + 0.03f * (float)(N_GSTR_SYNTH - 1 - s);     /* palm mute: басы чуть дольше */
     else if (g_sus && !muted) t60 *= SUS_GTR_MUL;                                    /* сустейн */
+    /* Лад: та же нота выше по грифу на толстой струне звучит иначе - струна короче и зажата
+     * пальцем: меньше верхов, круглее (щипок ближе к середине звучащей части), короче звенит.
+     * Открытая струна - самая звонкая и долгая. */
+    if (fret < 0) fret = 0;
+    if (fret > 15) fret = 15;
+    float fr = (float)fret;
+    if (!muted && fret > 0) t60 *= 0.82f - 0.022f * fr;
     if (t60 < 0.05f) t60 = 0.05f;
-    float damp_c = p->loop_damp + (muted || g_palm ? 0.25f : 0.0f);
+    float damp_c = p->loop_damp + (muted || g_palm ? 0.25f : 0.0f) + 0.022f * fr;
+    if (damp_c > 0.7f) damp_c = 0.7f;
     line_tune(&k->a, hz, damp_c, t60);
     line_tune(&k->b, hz * powf(2.0f, p->beat_cents / 1200.0f), damp_c + 0.04f, t60 * 0.7f);
     k->mix_b = 0.42f;
@@ -313,9 +321,12 @@ static void guitar_pluck(int s, int note, float vel) {
     /* возбуждение: форма оттянутой струны (вершина в месте щипка) + немного шума,
      * сглаживание - чем слабее удар, тем мягче; потом убрать постоянную составляющую */
     int n = k->a.n;
-    int pk = (int)(p->pick * (float)n);
+    float pick = p->pick * powf(2.0f, fr / 12.0f);         /* до бриджа то же, струна короче */
+    if (pick > 0.5f) pick = 0.5f;
+    int pk = (int)(pick * (float)n);
     if (pk < 1) pk = 1;
-    float bright = p->bright * (0.55f + 0.45f * vel) * (muted ? 0.4f : (g_palm ? 0.55f : 1.0f));
+    float bright = p->bright * (0.55f + 0.45f * vel) * (muted ? 0.4f : (g_palm ? 0.55f : 1.0f))
+                 * (1.0f / (1.0f + 0.07f * fr));
     float noise_amt = 0.22f + 0.18f * vel, lp = 0.0f, mean = 0.0f, mx = 0.0f;
     static float exc[G_BUF];
     for (int i = 0; i < n; i++) {
@@ -348,8 +359,9 @@ void synth_guitar_damp_tau(int mask, float tau) {
 
 void synth_guitar_damp(int mask) { synth_guitar_damp_tau(mask, 0.05f); }
 
-void synth_guitar(int s, int note, int delay, float vel) {
-    if (delay <= 0 || npend >= MAX_PENDING) { guitar_pluck(s, note, vel); return; }
+void synth_guitar(int s, int note, int fret, int delay, float vel) {
+    if (delay <= 0 || npend >= MAX_PENDING) { guitar_pluck(s, note, vel, fret); return; }
+    pend[npend].fret = fret;
     pend[npend].kind = 1;
     pend[npend].gstr = s;
     pend[npend].note = note;
@@ -445,7 +457,7 @@ void synth_render(int16_t *out, int n) {
         /* отложенные щипки, чей момент настал */
         for (int p = 0; p < npend; ) {
             if ((int32_t)(clock_s - pend[p].at) >= 0) {
-                if (pend[p].kind == 1) guitar_pluck(pend[p].gstr, pend[p].note, pend[p].vel);
+                if (pend[p].kind == 1) guitar_pluck(pend[p].gstr, pend[p].note, pend[p].vel, pend[p].fret);
                 else start_strum(pend[p].note);
                 pend[p] = pend[--npend];
             } else p++;

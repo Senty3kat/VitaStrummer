@@ -25,7 +25,7 @@ void synth_sustain(int on);   /* сустейн: ноты звучат доль�
 /* гитара: щипок струны s (0 - самая толстая) нотой note; note < 0 - заглушенная струна
  * (-нота открытой струны: короткий глухой стук). vel 0..1 - сила удара */
 #define N_GSTR_SYNTH 6
-void synth_guitar(int s, int note, int delay, float vel);
+void synth_guitar(int s, int note, int fret, int delay, float vel);   /* fret - лад (тембр), 0 - открытая */
 void synth_guitar_damp(int mask);       /* заглушить струны по маске битов */
 void synth_guitar_damp_tau(int mask, float tau);
 int  synth_guitar_active(void);

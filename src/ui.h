@@ -37,16 +37,17 @@ enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, 
 #define TRANSPOSE_MIN (-6)
 #define TRANSPOSE_MAX 6
 
-/* код быстрого аккорда (0 - пусто): тоника, качество, модификатор и октава.
- * Октава хранится как (oct + 5) % 5: у старых кодов (без октавы) она получается 0 */
-#define QUICK_MAX (1 + 11 + 12 + 24 * 8 + 216 * 4)
-static inline int quick_code(int root, int minor, int mod, int oct) {
-    return 1 + root + 12 * minor + 24 * mod + 216 * ((oct + 5) % 5);
+/* код быстрого аккорда (0 - пусто): тоника, качество, модификатор, октава и позиция на грифе.
+ * Октава хранится как (oct + 5) % 5, позиция 0..9 (0 - авто): у старых кодов обе получаются 0 */
+#define QUICK_MAX (1080 * 10)
+static inline int quick_code(int root, int minor, int mod, int oct, int gpos) {
+    return 1 + root + 12 * minor + 24 * mod + 216 * ((oct + 5) % 5) + 1080 * gpos;
 }
-static inline void quick_decode(int c, int *root, int *minor, int *mod, int *oct) {
+static inline void quick_decode(int c, int *root, int *minor, int *mod, int *oct, int *gpos) {
     c -= 1; *root = c % 12; *minor = (c / 12) % 2; *mod = (c / 24) % 9;
-    int oi = c / 216;
+    int oi = (c / 216) % 5;
     *oct = oi <= 2 ? oi : oi - 5;
+    *gpos = c / 1080;
 }
 
 int  ui_init(void);

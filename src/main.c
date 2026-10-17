@@ -191,8 +191,8 @@ static void on_strum(int zone, float frac, void *user) {
     int delay = (int)(frac * g_frame_dt * (float)SYNTH_RATE);
     if (guitar()) {
         int s = zone;
-        if (gch.note[s] >= 0) audio_guitar(s, gch.note[s], 0, g_vel, delay);
-        else audio_guitar(s, GT_TUNING[s] + 12 * st.octave + st.transpose, 1, g_vel, delay);   /* заглушённая - глухой стук */
+        if (gch.note[s] >= 0) audio_guitar(s, gch.note[s], gch.fret[s], 0, g_vel, delay);
+        else audio_guitar(s, GT_TUNING[s] + 12 * st.octave + st.transpose, 0, 1, g_vel, delay);   /* заглушённая - глухой стук */
         return;
     }
     audio_strum(smap.zone_note[zone] + st.transpose, delay);
@@ -249,14 +249,14 @@ static void set_volume_x(float x) {
 
 static void quick_recall(int k) {
     if (k < 0 || k >= QS_N || !st.quick[k]) return;
-    quick_decode(st.quick[k], &st.root, &st.minor, &st.mod, &st.octave);   /* и октава, с которой сохранён */
+    quick_decode(st.quick[k], &st.root, &st.minor, &st.mod, &st.octave, &st.gpos);   /* и октава, и позиция на грифе */
     st.chord_on = 1;
     apply_state();
 }
 
 static void quick_store(int k) {
     if (k < 0 || k >= QS_N) return;
-    st.quick[k] = st.chord_on ? quick_code(st.root, st.minor, st.mod, st.octave) : 0;
+    st.quick[k] = st.chord_on ? quick_code(st.root, st.minor, st.mod, st.octave, st.gpos) : 0;
     ui_set_state(&st, &smap);
     settings_touch();
 }
@@ -317,7 +317,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9");
+    dbg_log("start v0.9.1");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));

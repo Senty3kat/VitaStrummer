@@ -15,10 +15,10 @@ static void on_hit(int zone, float frac, void *u) { (void)zone; (void)frac; (voi
 
 /* быстрые аккорды для превью: C, G, Am, F на D-pad; Dm7, Esus4, Cmaj7 на стике, один пустой */
 static void fill_quick(AppState *s) {
-    s->quick[0] = quick_code(0, 0, 0, 0); s->quick[1] = quick_code(7, 0, 0, 1);
-    s->quick[2] = quick_code(9, 1, 0, -1); s->quick[3] = quick_code(5, 0, 0, 0);
-    s->quick[4] = quick_code(2, 1, 1, 0); s->quick[5] = quick_code(4, 0, 7, 0);
-    s->quick[6] = quick_code(0, 0, 2, 2); s->quick[7] = 0;
+    s->quick[0] = quick_code(0, 0, 0, 0, 0); s->quick[1] = quick_code(7, 0, 0, 1, 0);
+    s->quick[2] = quick_code(9, 1, 0, -1, 0); s->quick[3] = quick_code(5, 0, 0, 0, 0);
+    s->quick[4] = quick_code(2, 1, 1, 0, 0); s->quick[5] = quick_code(4, 0, 7, 0, 0);
+    s->quick[6] = quick_code(0, 0, 2, 2, 0); s->quick[7] = 0;
 }
 
 static void set_state(int mode, int chord_on, int root, int minor, int mod, int octave) {
@@ -147,6 +147,12 @@ int main(void) {
     g_gpos = 8;                                       /* C в 8-й позиции (баррэ) */
     set_state(MODE_GUITAR, 1, 0, 0, 0, 0);
     shot("screen_guitar_C_pos8", 0, 0);
+    g_gpos = 6;                                       /* C в 6-й позиции: средние струны заглушены */
+    set_state(MODE_GUITAR, 1, 0, 0, 0, 0);
+    shot("screen_guitar_C_pos6", 0, 0);
+    g_gpos = 2;                                       /* F во 2-й и 3-й - разные формы */
+    set_state(MODE_GUITAR, 1, 5, 0, 0, 0);
+    shot("screen_guitar_F_pos2", 0, 0);
     g_gpos = 0;
     set_state(MODE_GUITAR, 0, 0, 0, 0, 0);
     shot("screen_guitar_open", 0, 0);

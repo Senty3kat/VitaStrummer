@@ -46,13 +46,14 @@ void audio_pad(const int *notes, int n) {
 }
 
 /* гитара: notes[0] - струна, notes[1] - нота, notes[2] - 1 если заглушена, notes[3] - сила 0..255 */
-void audio_guitar(int string, int note, int muted, float vel, int delay_samples) {
+void audio_guitar(int string, int note, int fret, int muted, float vel, int delay_samples) {
     Ev e;
     memset(&e, 0, sizeof(e));
     e.type = EV_GUITAR;
     e.notes[0] = (uint8_t)string;
     e.notes[1] = (uint8_t)note;
     e.notes[2] = (uint8_t)(muted ? 1 : 0);
+    e.notes[4] = (uint8_t)(fret < 0 ? 0 : fret);
     if (vel < 0.0f) vel = 0.0f;
     if (vel > 1.0f) vel = 1.0f;
     e.notes[3] = (uint8_t)(vel * 255.0f);
@@ -125,7 +126,7 @@ static void drain_events(void) {
             synth_pad(nt, e.n);
         } else if (e.type == EV_GUITAR) {
             int note = e.notes[1];
-            synth_guitar(e.notes[0], e.notes[2] ? -note : note, e.delay, (float)e.notes[3] / 255.0f);
+            synth_guitar(e.notes[0], e.notes[2] ? -note : note, e.notes[4], e.delay, (float)e.notes[3] / 255.0f);
         } else if (e.type == EV_GDAMP) {
             synth_guitar_damp(e.notes[0]);
         } else if (e.type == EV_PALM) {

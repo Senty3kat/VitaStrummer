@@ -1167,15 +1167,15 @@ static void draw_header(const UiDebug *dbg) {
 /* быстрые аккорды: название на "кнопке", выбранный - оранжевый */
 static void draw_quick(void) {
     char buf[16];
-    int cur = g_st.chord_on ? quick_code(g_st.root, g_st.minor, g_st.mod, 0) : -1;   /* октаву не сравниваем */
+    int cur = g_st.chord_on ? quick_code(g_st.root, g_st.minor, g_st.mod, 0, 0) : -1;   /* октаву и позицию не сравниваем */
     for (int k = 0; k < QS_N; k++) {
         float x, y;
         quick_pos(k, &x, &y);
         int c = g_st.quick[k];
-        int r, mi, md, oc, sel = 0;
+        int r, mi, md, oc, gp, sel = 0;
         if (c) {
-            quick_decode(c, &r, &mi, &md, &oc);
-            sel = quick_code(r, mi, md, 0) == cur;
+            quick_decode(c, &r, &mi, &md, &oc, &gp);
+            sel = quick_code(r, mi, md, 0, 0) == cur;
         }
         if (sel) draw_sprite(&g_qs_on, x, y, 0);
         if (!c) { text_c(x, y - 1.0f, RGBA8(176, 160, 136, 255), 0.6f, "-", 0); continue; }

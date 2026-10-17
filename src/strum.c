@@ -57,18 +57,21 @@ static float pos_by_keys(float y) {
     return (float)N_STRINGS - 0.5f + (cl - y) / (white_h() * 0.5f) * 0.5f;
 }
 
-/* ---- хитбоксы клавиш, как на настоящей клавиатуре ----
- * Зона A (x < WK_XF) - там, где выступают чёрные: у чёрной клавиши своя полоса (чуть шире самой
- *   клавиши), белая - только промежуток между чёрными.
- * Зона B (WK_XF..WK_X1) - передняя часть белых: чёрных нет, белые делят высоту между собой.
- *   Глиссандо здесь играет только белые.
+/* ---- хитбоксы клавиш (по просьбе автора) ----
+ * Зона K (x < KZ_BLACK) - где выступают чёрные: только чёрные, каждая до середины до соседней
+ *   чёрной. Белые здесь не нажимаются, даже в щелях между чёрными.
+ * Зона A (KZ_BLACK..KZ_WHITE) - узкий переход: по высоте, как нарисовано (чёрная - своя полоса).
+ * Зона B (KZ_WHITE..WK_X1) - середина и передняя часть белых: чёрных нет, белые делят высоту
+ *   между собой. Глиссандо здесь играет только белые.
  * Полоса клавиши k в "струнах" - отрезок [k, k+1]: положение внутри полосы линейно по высоте.
  * Дальше (нити, полосы струн) - как раньше: плавный переход к положению по струнам. */
-#define BK_MARGIN 2.0f
+#define BK_MARGIN 1.0f
+#define KZ_BLACK ((float)WK_X0 + 12.0f)  /* левее - только чёрные */
+#define KZ_WHITE ((float)WK_X0 + 28.0f)  /* правее - только белые */
 #define KEY_EDGE 18.0f                 /* крайние клавиши - с запасом за край клавиатуры */
 
 typedef struct { float top, bot; } KeyBand;     /* y: top < bot; ключ - индекс массива */
-static KeyBand g_band_a[N_STRINGS], g_band_b[N_STRINGS];
+static KeyBand g_band_a[N_STRINGS], g_band_b[N_STRINGS], g_band_k[N_STRINGS];
 static int g_bands_ready = 0;
 
 static void bands_init(void) {
@@ -84,6 +87,16 @@ static void bands_init(void) {
             g_band_b[i].top = hi < N_STRINGS ? (c + key_center_y(hi)) * 0.5f : c - wh * 0.5f - KEY_EDGE;
         } else {
             g_band_b[i].top = g_band_b[i].bot = c;      /* в зоне B чёрных нет */
+        }
+        /* зона K: чёрная - до середины до соседней чёрной (крайние - до края клавиатуры) */
+        if (key_is_black(i)) {
+            int lo = i - 1, hi = i + 1;
+            while (lo >= 0 && !key_is_black(lo)) lo--;
+            while (hi < N_STRINGS && !key_is_black(hi)) hi++;
+            g_band_k[i].bot = lo >= 0 ? (c + key_center_y(lo)) * 0.5f : (float)KB_BOTTOM + KEY_EDGE;
+            g_band_k[i].top = hi < N_STRINGS ? (c + key_center_y(hi)) * 0.5f : (float)KB_TOP - KEY_EDGE;
+        } else {
+            g_band_k[i].top = g_band_k[i].bot = c;      /* в зоне K белых нет */
         }
         /* зона A */
         if (key_is_black(i)) {
@@ -104,10 +117,11 @@ static void bands_init(void) {
 }
 
 /* положение по полосам клавиш (зона A или B) */
-static float pos_by_bands(const KeyBand *b, int whites_only, float y) {
+/* only: 0 - все клавиши, 1 - только белые, 2 - только чёрные */
+static float pos_by_bands(const KeyBand *b, int only, float y) {
     int first = -1, last = -1;
     for (int i = 0; i < N_STRINGS; i++) {
-        if (whites_only && key_is_black(i)) continue;
+        if ((only == 1 && key_is_black(i)) || (only == 2 && !key_is_black(i))) continue;
         if (first < 0) first = i;
         last = i;
         if (y <= b[i].bot && y >= b[i].top) {
@@ -118,12 +132,17 @@ static float pos_by_bands(const KeyBand *b, int whites_only, float y) {
     return y > b[first].bot ? (float)first : (float)last + 0.999f;     /* за краем клавиатуры */
 }
 
-int strum_whites_only(float x) { return x >= (float)WK_XF && x < (float)WK_X1; }
+int strum_key_kind(float x) {
+    if (x < KZ_BLACK) return 2;
+    if (x < KZ_WHITE) return 0;
+    return x < (float)WK_X1 ? 1 : 0;
+}
 
 float strum_pos_from_xy(float x, float y) {
     if (!g_bands_ready) bands_init();
     float p;
-    if (x < (float)WK_XF) p = pos_by_bands(g_band_a, 0, y);
+    if (x < KZ_BLACK) p = pos_by_bands(g_band_k, 2, y);
+    else if (x < KZ_WHITE) p = pos_by_bands(g_band_a, 0, y);
     else if (x < (float)WK_X1) p = pos_by_bands(g_band_b, 1, y);
     else {
         /* нити: от полос белых к прежней плавной интерполяции, потом к положению по струнам */
@@ -153,19 +172,23 @@ int strum_key_at(float x, float y) {
 int strum_cross(int *cur, float x0, float y0, float x1, float y1, int *keys, float *fracs, int max) {
     (void)x0;
     float p0 = strum_pos_from_xy(x1, y0), p1 = strum_pos_from_xy(x1, y1);
-    int wo = strum_whites_only(x1), k = *cur, n = 0;
-    if (k < 0 || k >= N_STRINGS || (wo && key_is_black(k))) { k = (int)p0; if (k >= N_STRINGS) k = N_STRINGS - 1; }
+    int only = strum_key_kind(x1), k = *cur, n = 0;
+#define SKIP(i) ((only == 1 && key_is_black(i)) || (only == 2 && !key_is_black(i)))
+    if (k < 0 || k >= N_STRINGS || SKIP(k)) {        /* перешёл в другую зону - клавиша по месту, без звука */
+        k = (int)p0;
+        if (k >= N_STRINGS) k = N_STRINGS - 1;
+    }
     for (int guard = 0; guard < N_STRINGS && n < max; guard++) {
         int nx;
         float edge;
         if (p1 >= (float)(k + 1) + HYST) {                     /* вверх */
             nx = k + 1;
-            while (wo && nx < N_STRINGS && key_is_black(nx)) nx++;
+            while (nx < N_STRINGS && SKIP(nx)) nx++;
             if (nx >= N_STRINGS || p1 < (float)nx + HYST) break;
             edge = (float)nx;
         } else if (p1 <= (float)k - HYST) {                    /* вниз */
             nx = k - 1;
-            while (wo && nx >= 0 && key_is_black(nx)) nx--;
+            while (nx >= 0 && SKIP(nx)) nx--;
             if (nx < 0 || p1 > (float)(nx + 1) - HYST) break;
             edge = (float)(nx + 1);
         } else break;
@@ -175,6 +198,7 @@ int strum_cross(int *cur, float x0, float y0, float x1, float y1, int *keys, flo
         n++;
         k = nx;
     }
+#undef SKIP
     *cur = k;
     return n;
 }

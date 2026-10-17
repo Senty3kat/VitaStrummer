@@ -104,18 +104,21 @@ static void test_strum(void) {
     CHECK(nhits == m.nzones);
 }
 
-/* быстрые аккорды: код с октавой, старые коды (без октавы) - октава 0 */
+/* быстрые аккорды: код с октавой и позицией на грифе; старые коды - октава 0, позиция авто */
 static void test_quick(void) {
-    for (int oct = -2; oct <= 2; oct++)
-        for (int mod = 0; mod < N_MODS; mod++) {
-            int r, mi, md, oc, c = quick_code(11, 1, mod, oct);
-            CHECK(c > 0 && c <= QUICK_MAX);
-            quick_decode(c, &r, &mi, &md, &oc);
-            CHECK(r == 11 && mi == 1 && md == mod && oc == oct);
-        }
-    int r, mi, md, oc;
-    quick_decode(1 + 7 + 12 * 0 + 24 * 3, &r, &mi, &md, &oc);   /* как писала v0.8 */
-    CHECK(r == 7 && mi == 0 && md == 3 && oc == 0);
+    for (int gp = 0; gp <= GT_POS_MAX; gp++)
+        for (int oct = -2; oct <= 2; oct++)
+            for (int mod = 0; mod < N_MODS; mod++) {
+                int r, mi, md, oc, gq, c = quick_code(11, 1, mod, oct, gp);
+                CHECK(c > 0 && c <= QUICK_MAX);
+                quick_decode(c, &r, &mi, &md, &oc, &gq);
+                CHECK(r == 11 && mi == 1 && md == mod && oc == oct && gq == gp);
+            }
+    int r, mi, md, oc, gq;
+    quick_decode(1 + 7 + 12 * 0 + 24 * 3, &r, &mi, &md, &oc, &gq);   /* как писала v0.8 */
+    CHECK(r == 7 && mi == 0 && md == 3 && oc == 0 && gq == 0);
+    quick_decode(1 + 7 + 24 * 3 + 216 * 4, &r, &mi, &md, &oc, &gq);  /* как писала v0.9 (октава -1) */
+    CHECK(r == 7 && md == 3 && oc == -1 && gq == 0);
 }
 
 static void test_keys(void) {
@@ -142,37 +145,44 @@ static void test_keys(void) {
         CHECK((int)strum_pos_from_xy((BULB_X1 + BAR_X1) / 2.0f, strum_string_y(i)) == i);
     }
 
-    /* хитбоксы: на передней части белых (где чёрных нет) чёрные не срабатывают,
-     * а там, где чёрные выступают, на высоте чёрной звучит чёрная, а не соседняя белая */
-    float xf = (WK_XF + WK_X1) / 2.0f, xa = (BK_X0 + BK_X1) / 2.0f;
+    /* хитбоксы (как просил автор): слева, где выступают чёрные, - только чёрные (и в щелях);
+     * на середине и передней части белых - только белые; между ними узкий переход по рисунку */
+    float xk = (BK_X0 + WK_X0) / 2.0f, xm = WK_X0 + 20.0f, xw = (WK_X0 + WK_X1) / 2.0f, xf = (WK_XF + WK_X1) / 2.0f;
+    for (float y = KB_TOP - 10.0f; y <= KB_BOTTOM + 10.0f; y += 1.0f) {
+        CHECK(key_is_black(strum_key_at(xk, y)));
+        CHECK(!key_is_black(strum_key_at(xw, y)));
+        CHECK(!key_is_black(strum_key_at(xf, y)));
+    }
     for (int i = 0; i < N_STRINGS; i++) {
         if (key_is_black(i)) {
-            CHECK(!key_is_black(strum_key_at(xf, key_center_y(i))));
-            CHECK(strum_key_at(xa, key_center_y(i)) == i);
-            CHECK(strum_key_at(xa, key_center_y(i) + BK_H / 2.0f - 0.5f) == i);   /* у самого края чёрной */
-            CHECK(strum_key_at(xa, key_center_y(i) - BK_H / 2.0f + 0.5f) == i);
+            CHECK(strum_key_at(xk, key_center_y(i)) == i);
+            CHECK(strum_key_at(xm, key_center_y(i)) == i);
+            CHECK(strum_key_at(xm, key_center_y(i) + BK_H / 2.0f - 0.5f) == i);   /* у самого края чёрной */
+            CHECK(strum_key_at(xm, key_center_y(i) - BK_H / 2.0f + 0.5f) == i);
         } else {
             float y0, y1, b0, b1;
             white_key_extents(i, &y0, &y1, &b0, &b1);
-            CHECK(strum_key_at(xf, key_center_y(i)) == i);
-            CHECK(strum_key_at(xa, (b0 + b1) / 2.0f) == i);
+            CHECK(strum_key_at(xw, key_center_y(i)) == i);
+            CHECK(strum_key_at(xm, (b0 + b1) / 2.0f) == i);
         }
     }
-    /* проведение по передней части белых снизу вверх: только белые, все подряд, по одному разу */
+    /* проведения снизу вверх: по белым - только белые, слева - только чёрные, в переходе - все */
     {
-        int cur = strum_key_at(xf, KB_BOTTOM - 1.0f), keys[N_STRINGS], nw = 0;
+        int keys[N_STRINGS], nw = 0, nb = 0;
         float fr[N_STRINGS];
-        int n = strum_cross(&cur, xf, KB_BOTTOM - 1.0f, xf, KB_TOP + 1.0f, keys, fr, N_STRINGS);
-        for (int i = 0; i < n; i++) {
-            CHECK(!key_is_black(keys[i]));
-            if (i) CHECK(keys[i] > keys[i - 1] && fr[i] >= fr[i - 1]);
+        for (int i = 0; i < N_STRINGS; i++) { nw += !key_is_black(i); nb += key_is_black(i); }
+        float xs[3] = { xw, xk, xm };
+        int want[3] = { nw - 1, nb - 1, N_STRINGS - 1 };
+        for (int z = 0; z < 3; z++) {
+            int cur = strum_key_at(xs[z], KB_BOTTOM - 1.0f);
+            int n = strum_cross(&cur, xs[z], KB_BOTTOM - 1.0f, xs[z], KB_TOP + 1.0f, keys, fr, N_STRINGS);
+            for (int i = 0; i < n; i++) {
+                if (z == 0) CHECK(!key_is_black(keys[i]));
+                if (z == 1) CHECK(key_is_black(keys[i]));
+                if (i) CHECK(keys[i] > keys[i - 1] && fr[i] >= fr[i - 1]);
+            }
+            if (n != want[z]) { printf("FAIL keys sweep %d: %d != %d\n", z, n, want[z]); fails++; }
         }
-        for (int i = 0; i < N_STRINGS; i++) nw += !key_is_black(i);
-        CHECK(n == nw - 1);                          /* все белые, кроме той, с которой начали */
-        /* там, где выступают чёрные - все 24 клавиши */
-        cur = strum_key_at(xa, KB_BOTTOM - 1.0f);
-        n = strum_cross(&cur, xa, KB_BOTTOM - 1.0f, xa, KB_TOP + 1.0f, keys, fr, N_STRINGS);
-        CHECK(n == N_STRINGS - 1);
     }
 
     /* движение вбок с клавиш на нити и струны: положение меняется плавно, без скачков */
@@ -235,6 +245,35 @@ static void test_guitar(void) {
                     if (gp.fret[s2] >= 0) CHECK(chord_mask(r, t) & (1 << (gp.note[s2] % 12)));
                 }
             }
+    /* у каждой позиции своя форма: ни одна не повторяет другую */
+    for (int r = 0; r < 12; r++)
+        for (int t = 0; t < N_TYPES; t++) {
+            GuitarChord ps[GT_POS_MAX + 1];
+            for (int q = 1; q <= GT_POS_MAX; q++) guitar_voicing(&ps[q], 1, r, t, 0, q);
+            for (int q = 1; q <= GT_POS_MAX; q++)
+                for (int q2 = q + 1; q2 <= GT_POS_MAX; q2++) {
+                    int same = 1;
+                    for (int s2 = 0; s2 < N_GSTR; s2++) if (ps[q].fret[s2] != ps[q2].fret[s2]) same = 0;
+                    if (same) { printf("FAIL guitar: %d/%d pos %d == pos %d\n", r, t, q, q2); fails++; }
+                }
+            for (int q = 2; q <= GT_POS_MAX; q++) {      /* и рука в позиции: зажатые лады не ниже её */
+                int snd = 0;
+                for (int s2 = 0; s2 < N_GSTR; s2++) {
+                    if (ps[q].fret[s2] >= 0) snd++;
+                    CHECK(ps[q].fret[s2] < 0 || ps[q].fret[s2] >= q);
+                }
+                CHECK(snd >= 3);
+            }
+        }
+    {   /* фа мажор: 2-я и 3-я позиции разные (замечание автора) */
+        GuitarChord a2, a3;
+        guitar_voicing(&a2, 1, 5, chord_type(0, 0), 0, 2);
+        guitar_voicing(&a3, 1, 5, chord_type(0, 0), 0, 3);
+        char b2[32], b3[32];
+        guitar_shape_str(&a2, b2, sizeof(b2)); guitar_shape_str(&a3, b3, sizeof(b3));
+        printf("F pos2: %s, pos3: %s\n", b2, b3);
+        CHECK(strcmp(b2, b3) != 0);
+    }
     GuitarChord g;
     guitar_voicing(&g, 0, 0, 0, 12, 0);                  /* без аккорда - открытые струны, со сдвигом */
     for (int s = 0; s < N_GSTR; s++) CHECK(g.fret[s] == 0 && g.note[s] == GT_TUNING[s] + 12);
@@ -262,16 +301,32 @@ static void test_key(void) {
     int16_t b[256];
     long e_open = 0, e_palm = 0;
     synth_init();
-    synth_guitar(2, 55, 0, 0.8f);
+    synth_guitar(2, 55, 5, 0, 0.8f);
     for (int i = 0; i < 80; i++) synth_render(b, 256);
     for (int i = 0; i < 40; i++) { synth_render(b, 256); for (int k = 0; k < 256; k++) e_open += abs(b[k]); }
     synth_init();
     synth_palm(1);
-    synth_guitar(2, 55, 0, 0.8f);
+    synth_guitar(2, 55, 5, 0, 0.8f);
     for (int i = 0; i < 80; i++) synth_render(b, 256);
     for (int i = 0; i < 40; i++) { synth_render(b, 256); for (int k = 0; k < 256; k++) e_palm += abs(b[k]); }
     synth_palm(0);
     printf("palm: level after 0.4 s %ld vs open %ld\n", e_palm, e_open);
+
+    /* лад: та же нота E4 открытой первой струной звонче, чем на 9-м ладу третьей */
+    double hf[2];
+    for (int pass = 0; pass < 2; pass++) {
+        synth_init();
+        if (pass == 0) synth_guitar(5, 64, 0, 0, 0.8f); else synth_guitar(3, 64, 9, 0, 0.8f);
+        double e = 0, d = 0;
+        int prev = 0;
+        for (int i = 0; i < 40; i++) {
+            synth_render(b, 256);
+            for (int k = 0; k < 256; k++) { e += (double)b[k] * b[k]; d += (double)(b[k] - prev) * (b[k] - prev); prev = b[k]; }
+        }
+        hf[pass] = d / (e + 1.0);
+    }
+    printf("fret timbre: open %.4f vs 9th fret %.4f (доля верхов)\n", hf[0], hf[1]);
+    CHECK(hf[1] < hf[0] * 0.7);
     CHECK(e_palm * 10 < e_open);
 
     /* сустейн: нота страммера через 2 с звучит заметно громче, но через 12 с почти стихла */
@@ -345,11 +400,11 @@ static void test_guitar_sound(void) {
     guitar_voicing(&gc, 1, 7, chord_type(0, 0), 0, 0);
     int pos = 0, clip = 0;
     for (int blk = 0; pos + G <= total; blk++, pos += G) {
-        if (blk == 5)  for (int s = 0; s < N_GSTR; s++) synth_guitar(s, gc.note[s], s * 500, 0.9f);
-        if (blk == 300) synth_guitar(5, 64, 0, 0.8f);
-        if (blk == 420) synth_guitar(4, 64, 0, 0.8f);
-        if (blk == 540) synth_guitar(3, 64, 0, 0.8f);
-        if (blk == 700) { for (int s = 0; s < N_GSTR; s++) synth_guitar(s, -(GT_TUNING[s]), s * 300, 0.7f); }
+        if (blk == 5)  for (int s = 0; s < N_GSTR; s++) synth_guitar(s, gc.note[s], gc.fret[s], s * 500, 0.9f);
+        if (blk == 300) synth_guitar(5, 64, 0, 0, 0.8f);
+        if (blk == 420) synth_guitar(4, 64, 5, 0, 0.8f);
+        if (blk == 540) synth_guitar(3, 64, 9, 0, 0.8f);
+        if (blk == 700) { for (int s = 0; s < N_GSTR; s++) synth_guitar(s, -(GT_TUNING[s]), 0, s * 300, 0.7f); }
         synth_render(out + pos, G);
         for (int i = 0; i < G; i++) if (out[pos + i] >= 32000 || out[pos + i] <= -32000) clip++;
     }

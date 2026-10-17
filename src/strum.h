@@ -46,8 +46,8 @@ void strum_move(StrumFinger *f, float pos, const StringMap *m, StrumHit hit, voi
 void strum_down_xy(StrumFinger *f, int id, float x, float y, const StringMap *m, StrumHit hit, void *user);
 void strum_move_xy(StrumFinger *f, float x, float y, const StringMap *m, StrumHit hit, void *user);
 int  strum_key_at(float x, float y);
-int  strum_whites_only(float x);         /* передняя часть белых - чёрных там нет */
-/* клавиши, задетые по пути (с учётом гистерезиса и пропуска чёрных на передней части белых) */
+int  strum_key_kind(float x);            /* 2 - только чёрные (слева), 1 - только белые, 0 - все */
+/* клавиши, задетые по пути (с гистерезисом; в зоне только чёрных/белых другие пропускаются) */
 int  strum_cross(int *cur, float x0, float y0, float x1, float y1, int *keys, float *fracs, int max);
 
 /* аккорд сменился: зона пальца пересчитывается без звука */
