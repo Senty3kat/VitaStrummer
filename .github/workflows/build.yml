@@ -27,6 +27,14 @@ jobs:
     container: vitasdk/vitasdk:2026.08
     steps:
       - uses: actions/checkout@v4
+      - name: MIDI по USB (клиент плагина psvita-usb-audio-midi из VitaMIDI)
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake -S third_party/psvita-usb-audio-midi -B build-usb \
+            -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake -DPSVITA_USB_AUDIO_MIDI_VITA=ON
+          cmake --build build-usb --target psvita_usb_audio_midi_client.suprx-self public_stub_aliases -- -j2
+          ls build-usb/*.suprx build-usb/*.a
       - name: Build
         run: |
           cmake -B build -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake

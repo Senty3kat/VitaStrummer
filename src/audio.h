@@ -3,7 +3,6 @@
 #ifndef AUDIO_H
 #define AUDIO_H
 
-/* размер блока: 256 сэмплов = 5.3 мс при 48 кГц (в сэмплере было 1024 = 21 мс) */
 #define AUDIO_GRAIN 128      /* 2.7 мс при 48 кГц: меньше задержка от касания до звука */
 
 int audio_start(void);
@@ -18,6 +17,7 @@ void audio_guitar_damp(int mask);                 /* заглушить стру
 void audio_volume(int strings, int pad);          /* 0..100 */
 void audio_sustain(int on);                        /* сустейн (задняя панель, левая рука) */
 void audio_palm(int on);                          /* ладонь на струнах (задняя панель) */
+void audio_wide(int on);                          /* объёмный звук: правый канал +10 мс */
 
 /* диагностика для верхней полосы */
 int audio_xruns(void);                    /* сколько раз блок пришёл заметно позже */

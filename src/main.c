@@ -50,6 +50,7 @@
 #include "strum.h"
 #include "ui.h"
 #include "layout.h"
+#include "midi.h"
 
 unsigned int _newlib_heap_size_user = 48 * 1024 * 1024;
 
@@ -101,7 +102,8 @@ static int base_note(void) { return STRING_BASE_NOTE + 12 * st.octave; }
 
 /* ---------- настройки: режим, октава, громкость, быстрые аккорды ---------- */
 #define SET_MAGIC 0x53545231u          /* "STR1" */
-typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos, transpose; } Settings;
+typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos, transpose,
+                 midi_rx, midi_tx, wide; } Settings;
 static int set_dirty = 0;
 static uint64_t set_dirty_t = 0;
 
@@ -126,6 +128,11 @@ static void settings_load(void) {
     if (n >= offsetof(Settings, gpos) + sizeof(int) && s.gpos >= 0 && s.gpos <= GT_POS_MAX) st.gpos = s.gpos;
     if (n >= offsetof(Settings, transpose) + sizeof(int) && s.transpose >= TRANSPOSE_MIN && s.transpose <= TRANSPOSE_MAX)
         st.transpose = s.transpose;
+    if (n >= offsetof(Settings, wide) + sizeof(int)) {
+        st.midi_rx = s.midi_rx ? 1 : 0;
+        st.midi_tx = s.midi_tx ? 1 : 0;
+        st.wide = s.wide ? 1 : 0;
+    }
 }
 
 static void settings_save(void) {
@@ -135,6 +142,7 @@ static void settings_save(void) {
     s.mode = st.mode; s.octave = st.octave; s.vol_strings = st.vol_strings; s.vol_pad = st.vol_pad;
     for (int k = 0; k < QS_N; k++) s.quick[k] = st.quick[k];
     s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor; s.gpos = st.gpos; s.transpose = st.transpose;
+    s.midi_rx = st.midi_rx; s.midi_tx = st.midi_tx; s.wide = st.wide;
     FILE *f = fopen(SET_TMP, "wb");             /* сначала во временный файл - сбой не испортит старый */
     if (!f) return;
     size_t n = fwrite(&s, 1, sizeof(s), f);
@@ -200,7 +208,22 @@ static void on_strum(int zone, float frac, void *user) {
         else audio_guitar(s, GT_TUNING[s] + 12 * st.octave + st.transpose, 0, 1, g_vel, delay);   /* заглушённая - глухой стук */
         return;
     }
-    audio_strum(smap.zone_note[zone] + st.transpose, delay);
+    int note = smap.zone_note[zone] + st.transpose;
+    audio_strum(note, delay);
+    /* передача по USB: в Strum каждый удар - нота на компьютер (длина - как звучит у нас) */
+    if (st.mode == MODE_STRUM && st.midi_tx)
+        midi_note(note, (int)(g_vel * 127.0f), st.palm ? 0.12f : (st.sus ? 2.5f : 0.9f));
+}
+
+/* приём по USB: ноты с компьютера звучат на струнах - пока только в хроматике (без аккорда и лада) */
+static void midi_in_frame(void) {
+    int notes[32], vels[32];
+    int n = midi_read(notes, vels, 32);
+    int chroma = !guitar() && !st.chord_on && !st.key_on;
+    for (int i = 0; i < n && chroma; i++) {
+        audio_strum(notes[i], 0);
+        ui_note_glow(notes[i] - base_note());
+    }
 }
 
 static StrumFinger *finger_find(int id) {
@@ -294,6 +317,15 @@ static int touch_down_ui(int kind, int idx, float x) {
         else { st.chord_on = 1; st.root = idx; key_auto_quality(); }
         break;
     case HIT_KEY:    key_toggle(); break;
+    case HIT_LOGO:   st.settings = 1; st.midi_state = midi_state(); break;
+    case HIT_SET:                               /* страница настроек */
+        if (idx == -1) st.settings = 0;
+        else if (idx == 0) st.midi_rx = !st.midi_rx;
+        else if (idx == 1) st.midi_tx = !st.midi_tx;
+        else if (idx == 2) { st.wide = !st.wide; audio_wide(st.wide); }
+        if (idx == 0 || idx == 1) { midi_set(st.midi_rx, st.midi_tx); st.midi_state = midi_state(); }
+        if (idx >= 0) settings_touch();
+        break;
     case HIT_GPOS:                              /* позиция на грифе; повторное касание - снова авто */
         if (idx < 0) return 1;
         /* у мажора и минора - только привычные формы: касание пустой ячейки берёт ближайшую */
@@ -325,7 +357,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9.6");
+    dbg_log("start v0.9.7");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));
@@ -343,6 +375,8 @@ int main(void) {
     int ar = audio_start();
     dbg_log("audio_start=%d grain=%d", ar, AUDIO_GRAIN);
     audio_volume(st.vol_strings, st.vol_pad);
+    audio_wide(st.wide);
+    if (st.midi_rx || st.midi_tx) midi_set(st.midi_rx, st.midi_tx);   /* как было при выходе */
     apply_state();
 
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
@@ -404,7 +438,8 @@ int main(void) {
         stick = sd;
 
         if ((released & SCE_CTRL_SELECT) && !sel_combo) { set_mode((st.mode + 1) % N_MODES); apply_state(); }
-        if (pressed & SCE_CTRL_CIRCLE)   { st.chord_on = 0; apply_state(); }
+        if ((pressed & SCE_CTRL_CIRCLE) && st.settings) { st.settings = 0; apply_state(); }
+        else if (pressed & SCE_CTRL_CIRCLE) { st.chord_on = 0; apply_state(); }
         if (pressed & SCE_CTRL_TRIANGLE) { key_toggle(); apply_state(); }
         if (pressed & SCE_CTRL_LTRIGGER) { octave_step(-1); apply_state(); }
         if (pressed & SCE_CTRL_RTRIGGER) { octave_step(1); apply_state(); }
@@ -456,7 +491,8 @@ int main(void) {
             if (!is_new) continue;
 
             int idx, kind = ui_hit(x, y, &idx);
-            int top = kind == HIT_MODE || kind == HIT_OCT || kind == HIT_TRN || kind == HIT_VOL || kind == HIT_KEY;
+            int top = kind == HIT_MODE || kind == HIT_OCT || kind == HIT_TRN || kind == HIT_VOL || kind == HIT_KEY
+                   || kind == HIT_LOGO;
             if (top && g_now - g_play_t < PLAY_GUARD_S) continue;     /* играют - верхние кнопки спят */
             if (kind == HIT_PLATE) {
                 g_play_t = g_now;
@@ -494,6 +530,14 @@ int main(void) {
         /* ---- настройки: сохранить через секунду после последнего изменения ---- */
         if (set_dirty && now_t - set_dirty_t > 1000000ULL) { settings_save(); set_dirty = 0; }
 
+        /* ---- MIDI по USB ---- */
+        midi_in_frame();
+        midi_frame(dt);
+        if (st.settings) {                     /* строка состояния на странице настроек */
+            int ms = midi_state();
+            if (ms != st.midi_state) { st.midi_state = ms; ui_set_state(&st, &smap); }
+        }
+
         /* ---- кадр ---- */
         UiDebug dbg;
         dbg.xruns = audio_xruns();
@@ -505,6 +549,7 @@ int main(void) {
         ui_draw(dt, &dbg);
     }
 
+    midi_shutdown();
     audio_stop();
     vita2d_fini();
     return 0;

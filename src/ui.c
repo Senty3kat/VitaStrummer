@@ -91,6 +91,7 @@ static StrPix *g_spix[N_STRINGS];
 static int g_spix_n[N_STRINGS];
 static Sprite g_root_spr[N_ROOTS][2], g_mod_spr[N_MODS][ST_N], g_qual_spr[2][ST_N], g_led[2];
 static Sprite g_knob, g_dot, g_qs_on;            /* ручка громкости, точка аппликатуры, выбранный быстрый аккорд */
+static Sprite g_set_panel, g_chk[2];              /* страница настроек: панель, галочка выкл/вкл */
 /* гитарный гриф: 0 - обычный, 1 - струны приглушены (для заглушенных струн аккорда) */
 static Canvas g_cv_gplate[2];
 static vita2d_texture *g_tex_gplate[2];
@@ -387,6 +388,40 @@ static int make_round(Sprite *sp, float r, const Skin *sk, int glow) {
 }
 
 /* подсветка выбранного быстрого аккорда: оранжевая "пилюля" с центром в (0, 0) */
+/* страница настроек: кремовая объёмная панель, в ней утопленная полоса под каждую строку */
+static int make_set_panel(Sprite *sp) {
+    Box bb = { SET_X, SET_Y, SET_X + SET_W, SET_Y + SET_H };
+    if (!sprite_alloc(sp, bb, 12)) return 0;
+    SdfRRect r = { SET_X - sp->x, SET_Y - sp->y, SET_W, SET_H, 26 };
+    bevel(&sp->cv, sdf_rrect, &r, box_shift(bb, -sp->x, -sp->y), &SK_CREAM, 6.0f);
+    for (int k = 0; k < 3; k++) {
+        float cy = SET_ROW_Y0 + k * SET_ROW_DY;
+        SdfRRect row = { SET_X + 24 - sp->x, cy - 28 - sp->y, SET_W - 48, 56, 28 };
+        Box br = { row.x, row.y, row.x + row.w, row.y + row.h };
+        engrave(&sp->cv, sdf_rrect, &row, br, RGBA8(226, 212, 188, 255), RGBA8(232, 220, 198, 255), 0);
+    }
+    return 1;
+}
+
+/* галочка: выкл - утопленная синяя ячейка, вкл - оранжевая объёмная */
+static int make_check(Sprite *sp, int on) {
+    float h = SET_CHK * 0.5f;
+    Box bb = { -h, -h, h, h };
+    if (!sprite_alloc(sp, bb, 8)) return 0;
+    SdfRRect r = { bb.x0 - sp->x, bb.y0 - sp->y, SET_CHK, SET_CHK, 9 };
+    Box b = box_shift(bb, -sp->x, -sp->y);
+    if (on) {
+        bevel(&sp->cv, sdf_rrect, &r, b, &SK_OR, 2.0f);
+        /* сама галочка - две светлые полоски */
+        float cx = -sp->x, cy = -sp->y;
+        cv_ribbon(&sp->cv, cx - 9, cy + 1, 4.5f, cx - 2, cy + 8, 4.5f, C_LCD_TEXT);
+        cv_ribbon(&sp->cv, cx - 3, cy + 8, 4.5f, cx + 10, cy - 8, 4.5f, C_LCD_TEXT);
+    } else {
+        engrave(&sp->cv, sdf_rrect, &r, b, RGBA8(70, 98, 121, 255), RGBA8(54, 80, 102, 255), 1);
+    }
+    return 1;
+}
+
 static int make_qs_on(Sprite *sp) {
     Box bb = { -QS_W * 0.5f, -QS_H * 0.5f, QS_W * 0.5f, QS_H * 0.5f };
     if (!sprite_alloc(sp, bb, 8)) return 0;
@@ -622,6 +657,7 @@ static int build_all(void) {
     Skin dot = { RGBA8(160, 74, 24, 255), RGBA8(250, 168, 92, 255), RGBA8(226, 104, 36, 255) };
     if (!make_round(&g_dot, 9.0f, &dot, 1)) return 0;
     if (!make_qs_on(&g_qs_on)) return 0;
+    if (!make_set_panel(&g_set_panel) || !make_check(&g_chk[0], 0) || !make_check(&g_chk[1], 1)) return 0;
     return 1;
 }
 
@@ -639,8 +675,8 @@ static void free_textures(void) {
         for (int k = 0; k < ST_N; k++) { if (g_qual_spr[q][k].tex) vita2d_free_texture(g_qual_spr[q][k].tex); g_qual_spr[q][k].tex = NULL; }
     for (int k = 0; k < 2; k++) { if (g_led[k].tex) vita2d_free_texture(g_led[k].tex); g_led[k].tex = NULL; }
     for (int v = 0; v < 2; v++) { if (g_tex_gplate[v]) vita2d_free_texture(g_tex_gplate[v]); g_tex_gplate[v] = NULL; }
-    Sprite *one[3] = { &g_knob, &g_dot, &g_qs_on };
-    for (int k = 0; k < 3; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
+    Sprite *one[6] = { &g_knob, &g_dot, &g_qs_on, &g_set_panel, &g_chk[0], &g_chk[1] };
+    for (int k = 0; k < 6; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
 }
 
 static void fluid_clear_textures(void);
@@ -667,6 +703,8 @@ static void create_textures(void) {
     g_knob.tex = tex_from(&g_knob.cv);
     g_dot.tex = tex_from(&g_dot.cv);
     g_qs_on.tex = tex_from(&g_qs_on.cv);
+    g_set_panel.tex = tex_from(&g_set_panel.cv);
+    for (int k = 0; k < 2; k++) g_chk[k].tex = tex_from(&g_chk[k].cv);
 }
 
 /* ---------- текст (рисует GPU каждый кадр) ---------- */
@@ -1257,6 +1295,12 @@ void ui_set_held(const int *kinds, const int *indices, int n) {
     g_held_n = n;
 }
 
+/* нота пришла по MIDI: струна загорается от клавиши */
+void ui_note_glow(int s) {
+    if (is_guitar() || s < 0 || s >= N_STRINGS) return;
+    fluid_hit(s, (float)(WK_X0 + WK_X1) * 0.5f, 1.0f);
+}
+
 void ui_touch_glow(float x0, float y0, float x1, float y1, int down) {
     if (!is_guitar()) {
         /* клавиши и струны страммера: те же хитбоксы, что у звука (чёрные не горят от белых) */
@@ -1283,6 +1327,18 @@ void ui_touch_glow(float x0, float y0, float x1, float y1, int down) {
 
 int ui_hit(float x, float y, int *index) {
     *index = 0;
+    if (g_st.settings) {                         /* страница настроек: только её кнопки */
+        *index = -1;
+        if (x < SET_X || x > SET_X + SET_W || y < SET_Y || y > SET_Y + SET_H) return HIT_SET;   /* мимо - закрыть */
+        if (x > SET_X + SET_W - 70 && y < SET_Y + 64) return HIT_SET;
+        for (int k = 0; k < 3; k++) {
+            float cy = SET_ROW_Y0 + k * SET_ROW_DY;
+            if (fabsf(y - cy) <= 30.0f && x >= SET_X + 20 && x <= SET_X + SET_W - 20) { *index = k; return HIT_SET; }
+        }
+        *index = -2;                             /* внутри панели, но не кнопка */
+        return HIT_SET;
+    }
+    if (x < LOGO_X1 && y < LOGO_Y1) return HIT_LOGO;
     /* верхняя полоса */
     if (y >= 28 && y <= CAP_Y + CAP_H + 4) {
         if (x >= 248 && x < 320)  { *index = MODE_STRUM; return HIT_MODE; }
@@ -1335,6 +1391,33 @@ int ui_hit(float x, float y, int *index) {
     return HIT_ROOT;
 }
 
+/* страница настроек поверх всего (GPU: готовые спрайты и текст) */
+static void draw_settings(void) {
+    vita2d_draw_rectangle(0, 0, 960, 544, RGBA8(14, 24, 36, 150));
+    draw_sprite(&g_set_panel, 0, 0, 0);
+    text_spaced(SET_X + 34, SET_Y + 40, C_NAVY, 0.95f, 4.0f, "SETTINGS", 1);
+    text_c(SET_X + SET_W - 34, SET_Y + 32, is_held(HIT_SET, -1) ? C_ORANGE : C_NAVY, 1.3f, "x", 1);
+    static const char *TITLE[3] = { "MIDI IN  (USB)", "MIDI OUT  (USB)", "WIDE SOUND" };
+    static const char *HINT[3] = { "notes from computer - chromatic strings (no chord)",
+                                   "Strum notes go to computer, channel 1",
+                                   "right channel 10 ms later - wider, more space" };
+    int val[3] = { g_st.midi_rx, g_st.midi_tx, g_st.wide };
+    for (int k = 0; k < 3; k++) {
+        float cy = SET_ROW_Y0 + k * SET_ROW_DY;
+        draw_sprite(&g_chk[val[k] ? 1 : 0], SET_CHK_X, cy, is_held(HIT_SET, k));
+        text_at(SET_CHK_X + 34, cy - 3, C_NAVY, 1.0f, TITLE[k], 1);
+        text_at(SET_CHK_X + 34, cy + 17, C_NAVY_SOFT, 0.62f, HINT[k], 0);
+    }
+    /* состояние USB-MIDI */
+    static const char *ST[] = { "MIDI off", "plugin not found: psvita_usb_audio_midi.skprx in ur0:tai",
+                                "USB busy: turn off VitaShell USB / other USB plugins",
+                                "waiting for USB cable...", "connected to computer" };
+    int ms = g_st.midi_state;
+    if (ms < 0 || ms > 4) ms = 0;
+    uint32_t sc = ms == 4 ? RGBA8(60, 140, 80, 255) : (ms == 3 || ms == 0 ? C_NAVY_SOFT : C_OR_EDGE);
+    text_at(SET_X + 34, SET_Y + SET_H - 22, sc, 0.66f, ST[ms], 1);
+}
+
 void ui_draw(float dt, const UiDebug *dbg) {
     fx_update(dt);
 
@@ -1345,6 +1428,7 @@ void ui_draw(float dt, const UiDebug *dbg) {
     draw_wheel();
     draw_header(dbg);
     draw_quick();
+    if (g_st.settings) draw_settings();
     vita2d_end_drawing();
     vita2d_swap_buffers();
 }

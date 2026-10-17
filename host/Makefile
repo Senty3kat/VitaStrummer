@@ -20,7 +20,8 @@ preview: preview.c vita2d_host.c $(SRC)/ui.c $(SRC)/canvas.c $(SRC)/theory.c $(S
 check:
 	$(CC) $(CFLAGS) -Werror -fsyntax-only $(SRC)/main.c
 	$(CC) $(CFLAGS) -Werror -fsyntax-only $(SRC)/audio.c
-	$(CC) $(CFLAGS) -Werror -fsyntax-only $(SRC)/ui.c $(SRC)/canvas.c $(SRC)/synth.c $(SRC)/theory.c $(SRC)/strum.c
+	$(CC) $(CFLAGS) -Werror -fsyntax-only $(SRC)/ui.c $(SRC)/canvas.c $(SRC)/synth.c $(SRC)/theory.c $(SRC)/strum.c $(SRC)/midi.c
+	$(CC) $(CFLAGS) -Werror -fsyntax-only -DVS_MIDI -I../third_party/psvita-usb-audio-midi/include $(SRC)/midi.c
 
 test: check tests preview
 	./tests

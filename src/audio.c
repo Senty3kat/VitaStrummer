@@ -105,13 +105,23 @@ static SceUID g_thread = -1;
 
 #define N_BUFS 3   /* драйвер читает отданный буфер асинхронно - пишем по кругу в три */
 
+/* стерео - для «объёмного звука» (правый канал с задержкой); если не открылось - моно */
 static int open_port(int *channels) {
-    int p = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, AUDIO_GRAIN, SYNTH_RATE, SCE_AUDIO_OUT_MODE_MONO);
-    if (p >= 0) { *channels = 1; return p; }
-    int p2 = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, AUDIO_GRAIN, SYNTH_RATE, SCE_AUDIO_OUT_MODE_STEREO);
-    if (p2 >= 0) { *channels = 2; return p2; }
+    int p = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, AUDIO_GRAIN, SYNTH_RATE, SCE_AUDIO_OUT_MODE_STEREO);
+    if (p >= 0) { *channels = 2; return p; }
+    int p2 = sceAudioOutOpenPort(SCE_AUDIO_OUT_PORT_TYPE_MAIN, AUDIO_GRAIN, SYNTH_RATE, SCE_AUDIO_OUT_MODE_MONO);
+    if (p2 >= 0) { *channels = 1; return p2; }
     return p;
 }
+
+/* «Объёмный звук»: правый канал звучит на 10 мс позже левого (эффект Хааса) - звук шире.
+ * Переключение - плавно за ~20 мс, без щелчка. */
+#define WIDE_DELAY (SYNTH_RATE / 100)      /* 10 мс */
+static volatile int g_wide = 0;
+static int16_t g_wbuf[WIDE_DELAY];
+static int g_wpos = 0;
+static float g_wmix = 0.0f;                /* 0 - моно, 1 - правый с задержкой */
+void audio_wide(int on) { g_wide = on ? 1 : 0; }
 
 static void drain_events(void) {
     while (q_tail != q_head) {
@@ -165,7 +175,18 @@ static int audio_thread(SceSize args, void *argp) {
 
         int16_t *ob = bufs[bi];
         if (ch == 1) memcpy(ob, mono, sizeof(mono));
-        else for (int i = 0; i < AUDIO_GRAIN; i++) { ob[2 * i] = mono[i]; ob[2 * i + 1] = mono[i]; }
+        else {
+            float target = g_wide ? 1.0f : 0.0f, step = 1.0f / (0.02f * (float)SYNTH_RATE);
+            for (int i = 0; i < AUDIO_GRAIN; i++) {
+                int16_t late = g_wbuf[g_wpos];
+                g_wbuf[g_wpos] = mono[i];
+                if (++g_wpos >= WIDE_DELAY) g_wpos = 0;
+                if (g_wmix < target) { g_wmix += step; if (g_wmix > target) g_wmix = target; }
+                else if (g_wmix > target) { g_wmix -= step; if (g_wmix < target) g_wmix = target; }
+                ob[2 * i] = mono[i];
+                ob[2 * i + 1] = (int16_t)((float)mono[i] + ((float)late - (float)mono[i]) * g_wmix);
+            }
+        }
 
         int r = sceAudioOutOutput(port, ob);
         bi = (bi + 1) % N_BUFS;

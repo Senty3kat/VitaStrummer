@@ -24,6 +24,11 @@ typedef struct {
     int sus;         /* сустейн (задняя панель, левая рука) */
     int gpos;        /* гитара: позиция руки на грифе, 0 - авто, 1..GT_POS_MAX - с этого лада */
     int transpose;   /* транспозиция звука в полутонах, TRANSPOSE_MIN..MAX (как каподастр) */
+    int settings;    /* открыта страница настроек */
+    int midi_rx;     /* приём MIDI по USB (ноты с компьютера; пока только в хроматике) */
+    int midi_tx;     /* передача MIDI по USB (ноты Strum на компьютер) */
+    int wide;        /* объёмный звук: правый канал +10 мс */
+    int midi_state;  /* MIDI_* (midi.h) - для строки состояния */
 } AppState;
 
 typedef struct {
@@ -32,7 +37,8 @@ typedef struct {
     int show;        /* показывать отладку */
 } UiDebug;
 
-enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN };
+enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN, HIT_LOGO, HIT_SET };
+/* HIT_SET: index 0 - приём MIDI, 1 - передача MIDI, 2 - объёмный звук, -1 - закрыть */
 
 #define TRANSPOSE_MIN (-6)
 #define TRANSPOSE_MAX 6
@@ -56,6 +62,7 @@ void ui_set_state(const AppState *s, const StringMap *m);
 /* палец на струнной панели (каждый кадр): от (x0,y0) прошлого кадра к (x1,y1) текущего,
  * down = 1 в первый кадр касания. Задетые струны загораются, по ним растекается цвет */
 void ui_touch_glow(float x0, float y0, float x1, float y1, int down);
+void ui_note_glow(int string);                      /* нота по MIDI: струна горит от клавиши */
 /* index: тоника (высота 0..11), модификатор, качество (0 мажор / 1 минор), режим, шаг октавы (-1 / +1),
  * громкость 0..100 (HIT_VOL) или номер быстрого аккорда (HIT_QUICK); HIT_KEY - касание табло;
  * HIT_GPOS - полоска позиций под грифом: 0 авто, 1..GT_POS_MAX лад */

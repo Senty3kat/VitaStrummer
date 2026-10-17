@@ -9,7 +9,7 @@
 extern const char *host_frame_name;
 
 static StringMap g_m, g_gm;
-static int g_key_on, g_key_root, g_key_minor, g_palm, g_gpos, g_trn;
+static int g_key_on, g_key_root, g_key_minor, g_palm, g_gpos, g_trn, g_set;
 static int g_mode;
 static void on_hit(int zone, float frac, void *u) { (void)zone; (void)frac; (void)u; }
 
@@ -27,6 +27,7 @@ static void set_state(int mode, int chord_on, int root, int minor, int mod, int 
     s.mode = mode; s.chord_on = chord_on; s.root = root; s.minor = minor; s.mod = mod; s.octave = octave;
     s.vol_strings = 70; s.vol_pad = 45;
     s.key_on = g_key_on; s.key_root = g_key_root; s.key_minor = g_key_minor; s.palm = g_palm; s.gpos = g_gpos; s.transpose = g_trn;
+    s.settings = g_set; s.midi_tx = g_set; s.wide = g_set; s.midi_state = g_set ? 4 : 0;
     fill_quick(&s);
     g_mode = mode;
     stringmap_build(&g_m, chord_on, root, chord_type(minor, mod), STRING_BASE_NOTE + 12 * octave);
@@ -118,6 +119,10 @@ int main(void) {
     g_trn = 0;
     set_state(MODE_STRUM, 1, 5, 0, 7, 0);
     shot("screen_Fsus4", 0, 0);
+    g_set = 1;                                        /* страница настроек: передача и объём включены */
+    set_state(MODE_STRUM, 1, 5, 0, 7, 0);
+    shot("screen_settings", 0, 0);
+    g_set = 0;
 
     set_state(MODE_STRUM, 1, 9, 1, 1, 0);
     run("anim", path_swipe, 15, 60);

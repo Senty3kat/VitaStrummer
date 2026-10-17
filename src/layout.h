@@ -32,6 +32,18 @@
 #define LCD_W 216
 #define LCD_H 44
 
+/* страница настроек (касание логотипа): панель по центру, три строки с галочками */
+#define LOGO_X1 232           /* логотип: x < LOGO_X1, y < LOGO_Y1 */
+#define LOGO_Y1 62
+#define SET_X 210
+#define SET_Y 96
+#define SET_W 540
+#define SET_H 330
+#define SET_ROW_Y0 172        /* центр первой строки */
+#define SET_ROW_DY 76
+#define SET_CHK_X 262         /* центр галочки */
+#define SET_CHK 34            /* размер галочки */
+
 /* громкость (справа от табло): в Pad - громкость пэда, в остальных режимах - струн */
 #define VOL_X 852
 #define VOL_Y 12
