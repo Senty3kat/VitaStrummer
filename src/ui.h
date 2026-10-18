@@ -41,7 +41,8 @@ typedef struct {
     int show;        /* показывать отладку */
 } UiDebug;
 
-enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN, HIT_LOGO, HIT_SET };
+enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN, HIT_LOGO, HIT_SET, HIT_FADER };
+/* HIT_FADER (Pad only): index - громкость пэда 0..100 по высоте пальца */
 /* HIT_SET: index 0 - приём MIDI, 1 - передача MIDI, 2 - объёмный звук, 3 - dreamy-звук, -1 - закрыть */
 
 #define TRANSPOSE_MIN (-6)
@@ -71,6 +72,7 @@ void ui_note_glow(int string);                      /* нота по MIDI: ст�
  * громкость 0..100 (HIT_VOL) или номер быстрого аккорда (HIT_QUICK); HIT_KEY - касание табло;
  * HIT_GPOS - полоска позиций под грифом: 0 авто, 1..GT_POS_MAX лад */
 int  ui_hit(float x, float y, int *index);
+int  ui_fader_value(float y);                        /* Pad only: высота пальца -> громкость 0..100 */
 /* какие кнопки сейчас зажаты пальцами (для "нажатого" вида) */
 void ui_set_held(const int *kinds, const int *indices, int n);
 void ui_draw(float dt, const UiDebug *dbg);

@@ -94,6 +94,9 @@ static Sprite g_knob, g_dot, g_qs_on;            /* ручка громкост�
 static Sprite g_set_panel, g_chk[2];              /* страница настроек: панель, галочка выкл/вкл */
 /* гитарный гриф: 0 - обычный, 1 - струны приглушены (для заглушенных струн аккорда) */
 static Canvas g_cv_gplate[2];
+static Canvas g_cv_fader;                         /* Pad only: панель без струн с жёлобом фейдера */
+static vita2d_texture *g_tex_fader;
+static Sprite g_fknob;                            /* ручка фейдера */
 static vita2d_texture *g_tex_gplate[2];
 static StrPix *g_gpix[N_GSTR];
 static int g_gpix_n[N_GSTR];
@@ -625,6 +628,30 @@ static int build_all(void) {
     }
     if (!build_pixels(N_GSTR, gtr_mask_paint, gtr_range, g_gpix, g_gpix_n)) return 0;
 
+    /* Pad only: панель без струн, по центру - утопленный жёлоб фейдера и риски через 10% */
+    if (!canvas_alloc(&g_cv_fader, PLATE_W, PLATE_H)) return 0;
+    for (int y = 0; y < PLATE_H; y++)
+        memcpy(g_cv_fader.px + (size_t)y * PLATE_W, g_cv_bg.px + (size_t)(y + PLATE_Y) * SCR_W + PLATE_X, (size_t)PLATE_W * 4);
+    {
+        float gx = FD_CX - PLATE_X - FD_GW * 0.5f, gy = FD_Y0 - PLATE_Y - FD_GW * 0.5f;
+        SdfRRect g = { gx, gy, FD_GW, FD_Y1 - FD_Y0 + FD_GW, FD_GW * 0.5f };
+        Box bg = { g.x, g.y, g.x + g.w, g.y + g.h };
+        engrave(&g_cv_fader, sdf_rrect, &g, bg, RGBA8(40, 60, 80, 255), RGBA8(50, 72, 94, 255), 1);
+        for (int k = 0; k <= 10; k++) {
+            float y = FD_Y1 - PLATE_Y - (FD_Y1 - FD_Y0) * (float)k / 10.0f;
+            int w = (k % 5 == 0) ? 46 : 26;
+            cv_rect(&g_cv_fader, (int)(gx - 18 - w), (int)y, w, 2, RGBA8(150, 172, 190, 200));
+            cv_rect(&g_cv_fader, (int)(gx + FD_GW + 18), (int)y, w, 2, RGBA8(150, 172, 190, 200));
+        }
+    }
+    {
+        Box bk = { -FD_KW * 0.5f, -FD_KH * 0.5f, FD_KW * 0.5f, FD_KH * 0.5f };
+        if (!sprite_alloc(&g_fknob, bk, 10)) return 0;
+        SdfRRect k = { bk.x0 - g_fknob.x, bk.y0 - g_fknob.y, FD_KW, FD_KH, FD_KH * 0.5f };
+        bevel(&g_fknob.cv, sdf_rrect, &k, box_shift(bk, -g_fknob.x, -g_fknob.y), &SK_CREAM, 4.0f);
+        cv_rect(&g_fknob.cv, (int)(-g_fknob.x - 50), (int)(-g_fknob.y - 1), 100, 3, C_ORANGE);   /* риска на ручке */
+    }
+
     paint_strings(&g_cv_bg, 0, 0, &PS_NORMAL);
     if (!build_pixels(N_STRINGS, harp_mask_paint, harp_range, g_spix, g_spix_n)) return 0;
 
@@ -675,8 +702,10 @@ static void free_textures(void) {
         for (int k = 0; k < ST_N; k++) { if (g_qual_spr[q][k].tex) vita2d_free_texture(g_qual_spr[q][k].tex); g_qual_spr[q][k].tex = NULL; }
     for (int k = 0; k < 2; k++) { if (g_led[k].tex) vita2d_free_texture(g_led[k].tex); g_led[k].tex = NULL; }
     for (int v = 0; v < 2; v++) { if (g_tex_gplate[v]) vita2d_free_texture(g_tex_gplate[v]); g_tex_gplate[v] = NULL; }
-    Sprite *one[6] = { &g_knob, &g_dot, &g_qs_on, &g_set_panel, &g_chk[0], &g_chk[1] };
-    for (int k = 0; k < 6; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
+    if (g_tex_fader) vita2d_free_texture(g_tex_fader);
+    g_tex_fader = NULL;
+    Sprite *one[7] = { &g_knob, &g_dot, &g_qs_on, &g_set_panel, &g_chk[0], &g_chk[1], &g_fknob };
+    for (int k = 0; k < 7; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
 }
 
 static void fluid_clear_textures(void);
@@ -704,6 +733,8 @@ static void create_textures(void) {
     g_dot.tex = tex_from(&g_dot.cv);
     g_qs_on.tex = tex_from(&g_qs_on.cv);
     g_set_panel.tex = tex_from(&g_set_panel.cv);
+    g_tex_fader = tex_from(&g_cv_fader);
+    g_fknob.tex = tex_from(&g_fknob.cv);
     for (int k = 0; k < 2; k++) g_chk[k].tex = tex_from(&g_chk[k].cv);
 }
 
@@ -1089,8 +1120,27 @@ static void keys_hl_update(void) {
     g_khl_cur = ti;
 }
 
+int ui_fader_value(float y) {
+    float v = ((float)FD_Y1 - y) / (float)(FD_Y1 - FD_Y0) * 100.0f;
+    return v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
+}
+
+/* Pad only: вместо клавиш и струн - большой фейдер громкости пэда */
+static void draw_fader(void) {
+    char buf[24];
+    if (g_tex_fader) vita2d_draw_texture(g_tex_fader, PLATE_X, PLATE_Y);
+    float ky = (float)FD_Y1 - (float)(FD_Y1 - FD_Y0) * (float)g_st.vol_pad / 100.0f;
+    vita2d_draw_rectangle(FD_CX - 7, ky, 14, FD_Y1 - ky + 6, C_ORANGE);       /* налито от низа до ручки */
+    draw_sprite(&g_fknob, FD_CX, ky, is_held(HIT_FADER, 0));
+    text_spaced(PLATE_X + 34, PLATE_Y + 38, C_LCD_DIM, 0.7f, 3.0f, "PAD VOLUME", 1);
+    snprintf(buf, sizeof(buf), "%d", g_st.vol_pad);
+    text_at(PLATE_X + PLATE_W - 34 - text_w(1.4f, buf), PLATE_Y + 46, C_LCD_TEXT, 1.4f, buf, 1);
+    if (!g_st.chord_on) text_c(FD_CX, PLATE_Y + PLATE_H - 16, C_LCD_DIM, 0.62f, "choose a chord on the wheel", 0);
+}
+
 static void draw_plate(void) {
     if (is_guitar()) { draw_guitar(); return; }
+    if (g_st.mode == MODE_PADONLY) { draw_fader(); return; }
     keys_hl_update();
     if (g_khl_cur >= 0 && g_tex_khl[g_khl_cur]) vita2d_draw_texture(g_tex_khl[g_khl_cur], PLATE_X, PLATE_Y);
     /* в аккорде слабо горят струны с тоникой */
@@ -1102,16 +1152,6 @@ static void draw_plate(void) {
             plate_span(br, BULB_X1 - 30.0f, BAR_X1 + 1.0f, 55);
         }
     draw_fluid();
-    if (g_st.mode == MODE_PADONLY) {               /* Pad only: панель - кнопка вкл/выкл пэда */
-        int on = g_st.chord_on && !g_st.pad_off;
-        float cx = PLATE_X + PLATE_W * 0.5f, cy = PLATE_Y + PLATE_H * 0.5f;
-        if (!on) vita2d_draw_rectangle(PLATE_X + 18, PLATE_Y + 18, PLATE_W - 36, PLATE_H - 36, RGBA8(30, 46, 62, 150));
-        vita2d_draw_rectangle(cx - 150, cy - 46, 300, 92, RGBA8(36, 56, 76, on ? 170 : 210));
-        text_c(cx, cy - 14, on ? C_OR_TOP : C_LCD_TEXT, 1.5f,
-               !g_st.chord_on ? "PAD ONLY" : (on ? "PAD ON" : "PAD OFF"), 1);
-        text_c(cx, cy + 22, C_LCD_DIM, 0.7f,
-               !g_st.chord_on ? "choose a chord on the wheel" : (on ? "pad only - tap to stop" : "pad only - tap to play"), 0);
-    }
 }
 
 /* тональность: ступень тоники кнопки или -1 (не из лада / тональность выключена) */
@@ -1234,8 +1274,12 @@ static void draw_header(const UiDebug *dbg) {
 
     /* громкость: в Pad - пэда, в остальных режимах - струн */
     /* громкость пэда (баланс пэда и струн) - только в Pad; в других режимах ручки нет */
-    int pad = mode_pad(g_st.mode);
-    text_spaced(VOL_X + 16, VOL_Y + 15, pad ? C_NAVY : RGBA8(170, 156, 134, 255), 0.5f, 1.3f, "PAD VOL", 1);
+    int pad = g_st.mode == MODE_PAD;               /* в Pad only громкость - большой фейдер справа */
+    if (g_st.mode == MODE_PADONLY) {               /* дорожку ручки прячем - громкость теперь фейдер справа */
+        vita2d_draw_rectangle(VOL_TX0 - 6, VOL_TY - 6, VOL_TX1 - VOL_TX0 + 12, 12, RGBA8(229, 216, 193, 255));
+        text_c(VOL_X + VOL_W * 0.5f, VOL_Y + VOL_H * 0.5f - 1, C_NAVY, 0.62f, "PAD ONLY", 1);
+    }
+    else text_spaced(VOL_X + 16, VOL_Y + 15, pad ? C_NAVY : RGBA8(170, 156, 134, 255), 0.5f, 1.3f, "PAD VOL", 1);
     if (pad) {
         float kx = VOL_TX0 + (VOL_TX1 - VOL_TX0) * (float)g_st.vol_pad / 100.0f;
         vita2d_draw_rectangle(VOL_TX0 - 1, VOL_TY - 2, kx - VOL_TX0 + 1, 4, C_ORANGE);
@@ -1364,7 +1408,7 @@ int ui_hit(float x, float y, int *index) {
     /* табло: включить / выключить тональность */
     if (x >= LCD_X && x <= LCD_X + LCD_W && y >= LCD_Y - 4 && y <= LCD_Y + LCD_H + 6) return HIT_KEY;
     /* громкость: вся капсула, значение - по положению пальца на дорожке */
-    if (mode_pad(g_st.mode) && x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
+    if (g_st.mode == MODE_PAD && x >= VOL_X - 4 && x <= VOL_X + VOL_W + 4 && y >= VOL_Y - 4 && y <= VOL_Y + VOL_H + 8) {
         float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
         *index = v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
         return HIT_VOL;
@@ -1382,9 +1426,12 @@ int ui_hit(float x, float y, int *index) {
         else for (int p = 1; p <= GT_POS_MAX; p++) if (x < gtr_fret_x(p)) { *index = p; break; }
         return HIT_GPOS;
     }
-    /* струны */
+    /* струны (в Pad only - фейдер громкости пэда на всю панель) */
     SdfCarved pl = plate_shape();
-    if (sdf_carved(x, y, &pl) < 4.0f) return HIT_PLATE;
+    if (sdf_carved(x, y, &pl) < 4.0f) {
+        if (g_st.mode == MODE_PADONLY) { *index = ui_fader_value(y); return HIT_FADER; }
+        return HIT_PLATE;
+    }
 
     /* колесо: вся долька круга - кнопка */
     float dx = x - WHEEL_CX, dy = y - WHEEL_CY, d = sqrtf(dx * dx + dy * dy);

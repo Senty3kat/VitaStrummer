@@ -91,6 +91,11 @@ void midi_note(int ch, int note, int vel, float dur) {
     g_off_t[ch][note] = dur > 0.02f ? dur : 0.02f;
 }
 
+void midi_cc(int ch, int cc, int val) {
+    if (!g_tx || !g_acquired) return;
+    put3(0xB0 | ch, cc, val < 0 ? 0 : (val > 127 ? 127 : val));
+}
+
 void midi_frame(float dt) {
     if (!g_acquired) return;
     for (int c = 0; c < 2; c++)
@@ -126,6 +131,7 @@ int  midi_error(void) { return 0; }
 void midi_note(int ch, int note, int vel, float dur) { (void)ch; (void)note; (void)vel; (void)dur; }
 void midi_off(int ch, int note) { (void)ch; (void)note; }
 void midi_all_off(int ch) { (void)ch; }
+void midi_cc(int ch, int cc, int val) { (void)ch; (void)cc; (void)val; }
 void midi_frame(float dt) { (void)dt; }
 int  midi_read(int *notes, int *vels, int max) { (void)notes; (void)vels; (void)max; return 0; }
 void midi_shutdown(void) { }

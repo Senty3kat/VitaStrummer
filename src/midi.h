@@ -19,6 +19,7 @@ int  midi_error(void);                   /* последний код ошибк
 void midi_note(int ch, int note, int vel, float dur);
 void midi_off(int ch, int note);         /* note off, если нота звучит */
 void midi_all_off(int ch);
+void midi_cc(int ch, int cc, int val);   /* control change (громкость пэда - CC7) */
 /* раз в кадр: отправить накопленное, погасить истёкшие ноты (dt - секунды кадра) */
 void midi_frame(float dt);
 /* приём: принятые note on (note, vel), до max штук; note off не нужны (страммер - щипки) */

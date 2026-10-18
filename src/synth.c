@@ -58,6 +58,7 @@ void synth_guitar_damp_tau(int mask, float tau);
 #define SIN_N 1024
 static float g_sin[SIN_N + 1];
 static int g_dream = 0;
+static float g_dlp = 0.0f;                           /* фильтр dreamy-шины */
 static float g_lfo_t = 0.0f, g_lfo_v = 0.0f;          /* фазы тремоло и вибрато 0..1 */
 static inline float sinlut(float x) {                 /* sin(2 pi x), x в пределах -1..2 (без floorf) */
     if (x < 0.0f) x += 1.0f;
@@ -72,8 +73,8 @@ static const int DR_CL[DR_NC] = { 1214, 1293, 1389, 1475 };   /* длины Free
 static const int DR_AL[DR_NA] = { 605, 480 };
 static float dr_c[DR_NC][1475], dr_a[DR_NA][605], dr_lp[DR_NC];
 static int dr_ci[DR_NC], dr_ai[DR_NA];
-#define DR_FB 0.86f                                  /* длина хвоста */
-#define DR_DAMP 0.28f                                /* хвост темнее */
+#define DR_FB 0.82f                                  /* длина хвоста */
+#define DR_DAMP 0.45f                                /* хвост тёмный */
 #define DR_WET 0.34f
 static float dream_reverb(float x) {
     float y = 0.0f;
@@ -121,7 +122,7 @@ static Voice *alloc_voice(void) {
 /* затухание струны страммера: нижние звучат дольше верхних; ладонь - короткий щипок, сустейн - дольше */
 static float strum_tau(int note, int dream) {
     /* dreamy звенит дольше и мягче гаснет вверх по диапазону */
-    float tau = dream ? 2.4f * powf(2.0f, -(float)(note - 60) / 30.0f) : 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
+    float tau = dream ? 1.1f * powf(2.0f, -(float)(note - 60) / 28.0f) : 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
     if (g_palm) return 0.09f;
     return g_sus ? tau * SUS_STRUM_MUL : tau;
 }
@@ -147,11 +148,11 @@ static void start_strum(int note) {
     t->gain = t->dream ? DREAM_GAIN : STRUM_GAIN;
     if (t->dream) {
         float hz = note_hz(note);
-        t->midx = 0.55f;                                   /* яркий удар язычка ... */
-        t->midx_mul = exp_mul(0.28f);                      /* ... быстро смягчается */
+        t->midx = 0.22f;                                   /* мягкий удар язычка (автор: «слишком много верхов») */
+        t->midx_mul = exp_mul(0.12f);                      /* ... и сразу округляется */
         t->binc = 4.0f * t->inc;                           /* обертон вибрафона/калимбы */
-        t->bamp = hz < 1400.0f ? 0.30f : 0.12f;            /* у верхних нот - тише (не звенит) */
-        t->bmul = exp_mul(0.22f);
+        t->bamp = hz < 700.0f ? 0.10f : 0.04f;             /* обертон - лёгкий, у верхних почти нет */
+        t->bmul = exp_mul(0.09f);
         if (t->kind == V_STRUM && t->env == 0.0f) { t->mph = 0.0f; t->bph = 0.0f; }
     }
 }
@@ -377,7 +378,7 @@ static void guitar_pluck(int s, int note, float vel, int fret) {
     if (!muted && fret == 0 && !g_palm) t60 *= GTR_OPEN_RING;
     if (t60 < 0.05f) t60 = 0.05f;
     /* открытая струна: меньше потерь в петле - богаче обертонами, "глубже" */
-    float damp_c = p->loop_damp + (muted || g_palm ? 0.25f : 0.0f) + 0.022f * fr - (fret == 0 && !muted ? 0.05f : 0.0f);
+    float damp_c = p->loop_damp + (muted ? 0.45f : (g_palm ? 0.25f : 0.0f)) + 0.022f * fr - (fret == 0 && !muted ? 0.05f : 0.0f);
     if (damp_c < 0.02f) damp_c = 0.02f;
     if (damp_c > 0.7f) damp_c = 0.7f;
     line_tune(&k->a, hz, damp_c, t60);
@@ -392,9 +393,9 @@ static void guitar_pluck(int s, int note, float vel, int fret) {
     if (pick > 0.5f) pick = 0.5f;
     int pk = (int)(pick * (float)n);
     if (pk < 1) pk = 1;
-    float bright = p->bright * (0.55f + 0.45f * vel) * (muted ? 0.4f : (g_palm ? 0.55f : 1.0f))
+    float bright = p->bright * (0.55f + 0.45f * vel) * (muted ? 0.16f : (g_palm ? 0.55f : 1.0f))   /* глушёная - глухо */
                  * (1.0f / (1.0f + 0.07f * fr));
-    float noise_amt = 0.22f + 0.18f * vel, lp = 0.0f, mean = 0.0f, mx = 0.0f;
+    float noise_amt = muted ? 0.06f : 0.22f + 0.18f * vel, lp = 0.0f, mean = 0.0f, mx = 0.0f;   /* у глушёной - без «щелчка» шума */
     static float exc[G_BUF];
     for (int i = 0; i < n; i++) {
         float shape = i < pk ? (float)i / (float)pk : (float)(n - i) / (float)(n - pk);
@@ -407,7 +408,7 @@ static void guitar_pluck(int s, int note, float vel, int fret) {
     for (int i = 0; i < n; i++) mean += exc[i];
     mean /= (float)n;
     for (int i = 0; i < n; i++) { exc[i] -= mean; if (fabsf(exc[i]) > mx) mx = fabsf(exc[i]); }
-    float amp = (muted ? 0.35f : 1.0f) * (0.35f + 0.65f * vel) / (mx > 1e-6f ? mx : 1.0f);
+    float amp = (muted ? 0.16f : 1.0f) * (0.35f + 0.65f * vel) / (mx > 1e-6f ? mx : 1.0f);   /* глушёная - тихий стук */
     for (int i = 0; i < n; i++) k->a.buf[i] = exc[i] * amp;
     int nb = k->b.n;                                       /* вторая поляризация: то же, растянутое */
     for (int i = 0; i < nb; i++) k->b.buf[i] = exc[(int)((float)i * (float)n / (float)nb)] * amp;
@@ -572,6 +573,8 @@ void synth_render(int16_t *out, int n) {
         }
         /* dreamy-шина: тремоло, потом ревер (ревер считается всегда - хвост доигрывает после выключения) */
         dmix *= (1.0f - 0.16f * (0.5f + 0.5f * sinlut(g_lfo_t))) * g_vol_strings * VOL_SCALE;
+        g_dlp += (dmix - g_dlp) * 0.32f;                   /* мягкий НЧ-фильтр шины (~2.9 кГц): округло */
+        dmix = g_dlp;
         mix += dmix + DR_WET * dream_reverb(dmix * 0.6f);
         mix += guitar_render_sample() * g_vol_strings * VOL_SCALE;
         int o = (int)(soft_clip(mix) * 32000.0f);

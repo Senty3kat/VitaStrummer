@@ -92,14 +92,7 @@ static float g_play_t = -10.0f;      /* когда последний раз п�
 static float g_vel = 0.75f;           /* сила текущего удара (гитара) */
 static int g_gmidi[N_GSTR] = { -1, -1, -1, -1, -1, -1 };   /* какая нота каждой гитарной струны ушла по MIDI */
 static int g_mpad[MAX_CHORD], g_mpad_n = 0;                /* ноты пэда, отправленные по MIDI */
-static uint32_t g_rnd = 12345u;
-/* небольшой разброс силы удара от струны к струне (как у живой руки): +-7% */
-static float vel_spread(float v) {
-    g_rnd = g_rnd * 1664525u + 1013904223u;
-    float r = (float)(g_rnd >> 9) / (float)(1u << 23) * 2.0f - 1.0f;
-    v *= 1.0f + 0.07f * r;
-    return v < 0.05f ? 0.05f : (v > 1.0f ? 1.0f : v);
-}
+#define GTR_VEL 0.8f                  /* гитара: постоянная сила удара (MIDI - 101) */
 
 /* касания кнопок: пока палец лежит, кнопка выглядит нажатой */
 typedef struct { int id, kind, idx; } Held;
@@ -235,7 +228,7 @@ static void on_strum(int zone, float frac, void *user) {
     int delay = (int)(frac * g_frame_dt * (float)SYNTH_RATE);
     if (guitar()) {
         int s = zone;
-        float vel = vel_spread(g_vel);
+        float vel = GTR_VEL;
         if (gch.note[s] >= 0) {
             audio_guitar(s, gch.note[s], gch.fret[s], 0, vel, delay);
             /* MIDI: на струне одна нота - прежняя гаснет; звенит, пока не заглушили */
@@ -304,16 +297,20 @@ static void set_mode(int m) {
 }
 
 /* громкость по положению пальца на дорожке */
-static void set_volume_x(float x) {
-    float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
-    int iv = v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
-    if (!mode_pad(st.mode)) return;                /* ручка громкости есть только в Pad */
-    int *dst = &st.vol_pad;
-    if (*dst == iv) return;
-    *dst = iv;
+/* громкость пэда (ручка сверху в Pad, большой фейдер в Pad only); по MIDI - CC7 на канале пэда */
+static void set_pad_volume(int iv) {
+    if (!mode_pad(st.mode)) return;
+    if (st.vol_pad == iv) return;
+    st.vol_pad = iv;
     audio_volume(st.vol_strings, st.vol_pad);
+    if (st.midi_tx) midi_cc(MIDI_CH_PAD, 7, iv * 127 / 100);
     ui_set_state(&st, &smap);
     settings_touch();
+}
+
+static void set_volume_x(float x) {
+    float v = (x - VOL_TX0) / (float)(VOL_TX1 - VOL_TX0) * 100.0f;
+    set_pad_volume(v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f)));
 }
 
 static void quick_recall(int k) {
@@ -388,6 +385,7 @@ static int touch_down_ui(int kind, int idx, float x) {
     case HIT_OCT:    octave_step(idx); break;
     case HIT_TRN:    transpose_step(idx); break;
     case HIT_VOL:    set_volume_x(x); return 1;
+    case HIT_FADER:  set_pad_volume(idx); return 1;
     case HIT_QUICK:  quick_recall(idx); return 1;
     default:         return 0;
     }
@@ -406,7 +404,7 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9.8");
+    dbg_log("start v0.9.9");
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));
@@ -535,10 +533,8 @@ int main(void) {
                 float speed = fabsf(p - f->pos) / dt;
                 float v = speed / (guitar() ? 30.0f : 120.0f);
                 if (v > 1.0f) v = 1.0f;
-                if (guitar()) {                 /* гитара: шире разброс (медленно - тихо), сглажено по кадрам */
-                    float t = 0.3f + 0.7f * v;
-                    g_vel += (t - g_vel) * 0.6f;
-                } else g_vel = 0.45f + 0.55f * v;
+                /* гитара: сила постоянная (автору сила от скорости мешала и казалась задержкой) */
+                g_vel = guitar() ? GTR_VEL : 0.45f + 0.55f * v;
                 if (guitar()) strum_gtr_move(f, x, y, on_strum, NULL);       /* каждое пересечение струны */
                 else strum_move_xy(f, x, y, cur_map(), on_strum, NULL);    /* хитбоксы клавиш */
                 ui_touch_glow(f->x, f->y, x, y, 0);
@@ -547,16 +543,14 @@ int main(void) {
             }
             Held *hv = held_find(id);
             if (hv && hv->kind == HIT_VOL) { set_volume_x(x); continue; }   /* ручку громкости тянут */
+            if (hv && hv->kind == HIT_FADER) { set_pad_volume(ui_fader_value(y)); continue; }   /* и фейдер */
             if (!is_new) continue;
 
             int idx, kind = ui_hit(x, y, &idx);
             int top = kind == HIT_MODE || kind == HIT_OCT || kind == HIT_TRN || kind == HIT_VOL || kind == HIT_KEY
                    || kind == HIT_LOGO;
             if (top && g_now - g_play_t < PLAY_GUARD_S) continue;     /* играют - верхние кнопки спят */
-            if (kind == HIT_PLATE && st.mode == MODE_PADONLY) {   /* панель - кнопка вкл/выкл пэда */
-                st.pad_off = !st.pad_off;
-                apply_state();
-            } else if (kind == HIT_PLATE) {
+            if (kind == HIT_PLATE) {
                 g_play_t = g_now;
                 StrumFinger *fr = finger_find(-1);
                 if (fr) {
@@ -568,7 +562,7 @@ int main(void) {
                 }
             } else if (touch_down_ui(kind, idx, x)) {
                 Held *h = held_find(-1);
-                if (h) { h->id = id; h->kind = kind; h->idx = kind == HIT_VOL ? 0 : idx; }
+                if (h) { h->id = id; h->kind = kind; h->idx = (kind == HIT_VOL || kind == HIT_FADER) ? 0 : idx; }
             }
         }
         /* отпущенные пальцы */

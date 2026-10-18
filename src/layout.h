@@ -32,6 +32,14 @@
 #define LCD_W 216
 #define LCD_H 44
 
+/* Pad only: большой фейдер громкости пэда на месте струн (100% сверху, 0% снизу) */
+#define FD_CX (PLATE_X + PLATE_W / 2)
+#define FD_Y0 (PLATE_Y + 70)
+#define FD_Y1 (PLATE_Y + PLATE_H - 40)
+#define FD_GW 34              /* ширина жёлоба */
+#define FD_KW 190             /* ручка */
+#define FD_KH 46
+
 /* страница настроек (касание логотипа): панель по центру, три строки с галочками */
 #define LOGO_X1 232           /* логотип: x < LOGO_X1, y < LOGO_Y1 */
 #define LOGO_Y1 62
