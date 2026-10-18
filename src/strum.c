@@ -223,9 +223,15 @@ void strum_gtr_down(StrumFinger *f, int id, float x, float y, StrumHit hit, void
     int s = (int)f->pos;
     for (int i = 0; i < N_GSTR; i++) f->gside[i] = (signed char)gtr_side(i, y);
     f->zone = s;
-    f->gfresh = 4;                       /* ~65 мс: удар касанием уже прозвучал */
-    f->gfresh_s = s;
-    hit(s, 0.0f, user);
+    f->gfresh = 0;
+    /* Касание звучит, только если палец лёг прямо на струну. Поставил палец между струнами -
+     * тишина, звук - на пересечении линии: переменный штрих (вниз-вверх) идёт ровно, без
+     * «съеденного» первого удара. */
+    if (s >= 0 && s < N_GSTR && fabsf(y - gtr_string_y(s)) <= GTR_TAP_ZONE) {
+        f->gfresh = 4;                   /* ~65 мс: удар касанием уже прозвучал */
+        f->gfresh_s = s;
+        hit(s, 0.0f, user);
+    }
 }
 
 void strum_gtr_move(StrumFinger *f, float x, float y, StrumHit hit, void *user) {

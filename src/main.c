@@ -92,6 +92,11 @@ static float g_play_t = -10.0f;      /* когда последний раз п�
 static float g_vel = 0.75f;           /* сила текущего удара (гитара) */
 static int g_gmidi[N_GSTR] = { -1, -1, -1, -1, -1, -1 };   /* какая нота каждой гитарной струны ушла по MIDI */
 static int g_mpad[MAX_CHORD], g_mpad_n = 0;                /* ноты пэда, отправленные по MIDI */
+/* Pad + струны: внешний синт с малой полифонией отдаёт голоса пэда струнам - после проведения
+ * аккорд пэда по MIDI берётся заново (через PAD_RESTORE_S после последнего удара) */
+#define PAD_RESTORE_S 0.3f
+static float g_last_str_t = 0.0f;
+static int g_pad_restore = 0;
 #define GTR_VEL 0.8f                  /* гитара: постоянная сила удара (MIDI - 101) */
 
 /* касания кнопок: пока палец лежит, кнопка выглядит нажатой */
@@ -106,7 +111,8 @@ static int base_note(void) { return STRING_BASE_NOTE + 12 * st.octave; }
 /* ---------- настройки: режим, октава, громкость, быстрые аккорды ---------- */
 #define SET_MAGIC 0x53545231u          /* "STR1" */
 typedef struct { uint32_t magic, size; int mode, octave, vol_strings, vol_pad, quick[QS_N], key_on, key_root, key_minor, gpos, transpose,
-                 midi_rx, midi_tx, wide, sound; } Settings;
+                 midi_rx, midi_tx, wide, sound,
+                 hold, fd1, fd2, fd3; } Settings;
 static int set_dirty = 0;
 static uint64_t set_dirty_t = 0;
 
@@ -136,7 +142,12 @@ static void settings_load(void) {
         st.midi_tx = s.midi_tx ? 1 : 0;
         st.wide = s.wide ? 1 : 0;
     }
-    if (n >= offsetof(Settings, sound) + sizeof(int)) st.sound = s.sound ? 1 : 0;
+    if (n >= offsetof(Settings, sound) + sizeof(int) && s.sound >= 0 && s.sound < N_SOUNDS) st.sound = s.sound;
+    if (n >= offsetof(Settings, fd3) + sizeof(int)) {
+        st.hold = s.hold ? 1 : 0;
+        int fdv[3] = { s.fd1, s.fd2, s.fd3 };
+        for (int k = 0; k < 3; k++) if (fdv[k] >= 0 && fdv[k] <= 100) st.fd[k + 1] = fdv[k];
+    }
 }
 
 static void settings_save(void) {
@@ -147,6 +158,7 @@ static void settings_save(void) {
     for (int k = 0; k < QS_N; k++) s.quick[k] = st.quick[k];
     s.key_on = st.key_on; s.key_root = st.key_root; s.key_minor = st.key_minor; s.gpos = st.gpos; s.transpose = st.transpose;
     s.midi_rx = st.midi_rx; s.midi_tx = st.midi_tx; s.wide = st.wide; s.sound = st.sound;
+    s.hold = st.hold; s.fd1 = st.fd[1]; s.fd2 = st.fd[2]; s.fd3 = st.fd[3];
     FILE *f = fopen(SET_TMP, "wb");             /* сначала во временный файл - сбой не испортит старый */
     if (!f) return;
     size_t n = fwrite(&s, 1, sizeof(s), f);
@@ -166,7 +178,7 @@ static void send_pad(void) {
     }
     /* MIDI: пэд - на канале 2, держится, пока звучит; сила - от громкости пэда */
     {
-        int vel = 1 + st.vol_pad * 126 / 100, mn = st.midi_tx ? n : 0;
+        int vel = 1 + st.vol_pad * 126 / 100, mn = (st.midi_tx && st.vol_pad > 0) ? n : 0;
         for (int i = 0; i < g_mpad_n; i++) {
             int keep = 0;
             for (int k = 0; k < mn; k++) if (notes[k] == g_mpad[i]) keep = 1;
@@ -234,7 +246,7 @@ static void on_strum(int zone, float frac, void *user) {
             /* MIDI: на струне одна нота - прежняя гаснет; звенит, пока не заглушили */
             if (st.midi_tx) {
                 if (g_gmidi[s] >= 0 && g_gmidi[s] != gch.note[s]) midi_off(MIDI_CH_STR, g_gmidi[s]);
-                midi_note(MIDI_CH_STR, gch.note[s], (int)(vel * 127.0f), st.palm ? 0.2f : (st.sus ? 12.0f : 6.0f));
+                midi_note(MIDI_CH_STR, gch.note[s], (int)(vel * 127.0f), st.palm ? 0.15f : (st.sus ? 4.0f : 1.6f));
                 g_gmidi[s] = gch.note[s];
             }
         }
@@ -244,6 +256,7 @@ static void on_strum(int zone, float frac, void *user) {
     int note = smap.zone_note[zone] + st.transpose;
     audio_strum(note, delay);
     /* передача по USB: в Strum каждый удар - нота на компьютер (длина - как звучит у нас) */
+    if (st.mode == MODE_PAD) { g_last_str_t = g_now; g_pad_restore = 1; }
     if (st.midi_tx)                            /* Strum и струны в Pad */
         midi_note(MIDI_CH_STR, note, (int)(g_vel * 127.0f), st.palm ? 0.12f : (st.sus ? 2.5f : 0.9f));
 }
@@ -298,12 +311,31 @@ static void set_mode(int m) {
 
 /* громкость по положению пальца на дорожке */
 /* громкость пэда (ручка сверху в Pad, большой фейдер в Pad only); по MIDI - CC7 на канале пэда */
+/* Pad only без HOLD: аккорд звучит, пока держишь кнопку тоники / быстрого аккорда - ритм пальцами */
+static int momentary(void) { return st.mode == MODE_PADONLY && !st.hold; }
+static int g_mom_prev = 0;
+
+static void send_pad(void);
 static void set_pad_volume(int iv) {
     if (!mode_pad(st.mode)) return;
     if (st.vol_pad == iv) return;
+    int was0 = st.vol_pad == 0;
     st.vol_pad = iv;
     audio_volume(st.vol_strings, st.vol_pad);
     if (st.midi_tx) midi_cc(MIDI_CH_PAD, 7, iv * 127 / 100);
+    if (was0 != (iv == 0)) send_pad();              /* на нуле ноты пэда по MIDI гаснут, с нуля - снова */
+    ui_set_state(&st, &smap);
+    settings_touch();
+}
+
+/* Pad only: фейдеры атаки, среза фильтра и модуляции - звук пэда и CC73 / CC74 / CC1 на канале пэда */
+static const int FADER_CC[4] = { 7, 73, 74, 1 };
+static void set_fader(int k, int v) {
+    if (k == 0) { set_pad_volume(v); return; }
+    if (k < 0 || k > 3 || st.fd[k] == v) return;
+    st.fd[k] = v;
+    audio_pad_params(st.fd[1], st.fd[2], st.fd[3]);
+    if (st.midi_tx) midi_cc(MIDI_CH_PAD, FADER_CC[k], v * 127 / 100);
     ui_set_state(&st, &smap);
     settings_touch();
 }
@@ -347,9 +379,10 @@ static void key_toggle(void) {
 }
 
 /* новое касание вне струн: колесо, полоса сверху, быстрые аккорды */
-static int touch_down_ui(int kind, int idx, float x) {
+static int touch_down_ui(int kind, int idx, float x, float y) {
     switch (kind) {
     case HIT_ROOT:
+        if (momentary()) { st.chord_on = 1; st.root = idx; key_auto_quality(); break; }   /* без HOLD - пока держишь */
         if (st.chord_on && st.root == idx) st.chord_on = 0;
         else { st.chord_on = 1; st.root = idx; key_auto_quality(); }
         break;
@@ -360,7 +393,7 @@ static int touch_down_ui(int kind, int idx, float x) {
         else if (idx == 0) st.midi_rx = !st.midi_rx;
         else if (idx == 1) st.midi_tx = !st.midi_tx;
         else if (idx == 2) { st.wide = !st.wide; audio_wide(st.wide); }
-        else if (idx == 3) { st.sound = !st.sound; audio_sound(st.sound); }
+        else if (idx == 3) { st.sound = (st.sound + 1) % N_SOUNDS; audio_sound(st.sound); }
         if (idx == 0 || idx == 1) {
             midi_set(st.midi_rx, st.midi_tx);
             st.midi_state = midi_state();
@@ -385,7 +418,8 @@ static int touch_down_ui(int kind, int idx, float x) {
     case HIT_OCT:    octave_step(idx); break;
     case HIT_TRN:    transpose_step(idx); break;
     case HIT_VOL:    set_volume_x(x); return 1;
-    case HIT_FADER:  set_pad_volume(idx); return 1;
+    case HIT_FADER:  set_fader(idx, ui_fader_value(y)); return 1;
+    case HIT_HOLD:   st.hold = !st.hold; settings_touch(); break;
     case HIT_QUICK:  quick_recall(idx); return 1;
     default:         return 0;
     }
@@ -404,18 +438,20 @@ static int stick_dir(int lx, int ly, int prev) {
 
 int main(void) {
     sceIoMkdir(LOG_DIR, 0777);
-    dbg_log("start v0.9.9");
+    dbg_log("start " APP_VERSION);
 
     vita2d_init_advanced(4 * 1024 * 1024);
     vita2d_set_clear_color(RGBA8(60, 86, 110, 255));
     uint64_t t0 = sceKernelGetProcessTimeWide();
     if (!ui_init()) { dbg_log("ui_init failed"); sceKernelExitProcess(0); }
-    dbg_log("ui_init %d ms", (int)((sceKernelGetProcessTimeWide() - t0) / 1000));
+    dbg_log("ui_init %d ms: %s", (int)((sceKernelGetProcessTimeWide() - t0) / 1000), ui_build_report());
 
     memset(&st, 0, sizeof(st));
     st.mode = MODE_STRUM;
     st.vol_strings = 70;
     st.vol_pad = 70;
+    st.hold = 1;                       /* Pad only: аккорд залипает, как раньше */
+    st.fd[1] = 40; st.fd[2] = 100; st.fd[3] = 0;   /* атака 64 мс (как было), фильтр открыт, без модуляции */
     settings_load();
     touches_reset();
 
@@ -424,6 +460,7 @@ int main(void) {
     audio_volume(st.vol_strings, st.vol_pad);
     audio_wide(st.wide);
     audio_sound(st.sound);
+    audio_pad_params(st.fd[1], st.fd[2], st.fd[3]);
     if (st.midi_rx || st.midi_tx) midi_set(st.midi_rx, st.midi_tx);   /* как было при выходе */
     apply_state();
 
@@ -543,7 +580,7 @@ int main(void) {
             }
             Held *hv = held_find(id);
             if (hv && hv->kind == HIT_VOL) { set_volume_x(x); continue; }   /* ручку громкости тянут */
-            if (hv && hv->kind == HIT_FADER) { set_pad_volume(ui_fader_value(y)); continue; }   /* и фейдер */
+            if (hv && hv->kind == HIT_FADER) { set_fader(hv->idx, ui_fader_value(y)); continue; }   /* и фейдеры */
             if (!is_new) continue;
 
             int idx, kind = ui_hit(x, y, &idx);
@@ -560,9 +597,9 @@ int main(void) {
                     else strum_down_xy(fr, id, x, y, cur_map(), on_strum, NULL);
                     ui_touch_glow(x, y, x, y, 1);
                 }
-            } else if (touch_down_ui(kind, idx, x)) {
+            } else if (touch_down_ui(kind, idx, x, y)) {
                 Held *h = held_find(-1);
-                if (h) { h->id = id; h->kind = kind; h->idx = (kind == HIT_VOL || kind == HIT_FADER) ? 0 : idx; }
+                if (h) { h->id = id; h->kind = kind; h->idx = kind == HIT_VOL ? 0 : idx; }
             }
         }
         /* отпущенные пальцы */
@@ -578,6 +615,15 @@ int main(void) {
         for (int k = 0; k < nrep; k++) prev_ids[k] = ids[k];
         prev_n = nrep;
 
+        /* без HOLD: отпустил все кнопки аккорда (тоника, быстрые аккорды на экране, D-pad, стик) - тишина */
+        {
+            int holding = (pad.buttons & (SCE_CTRL_UP | SCE_CTRL_RIGHT | SCE_CTRL_DOWN | SCE_CTRL_LEFT)) != 0 || stick >= 0;
+            for (int i = 0; i < MAX_FINGERS; i++)
+                if (held[i].id >= 0 && (held[i].kind == HIT_ROOT || held[i].kind == HIT_QUICK)) holding = 1;
+            if (momentary() && g_mom_prev && !holding && st.chord_on) { st.chord_on = 0; apply_state(); }
+            g_mom_prev = holding;
+        }
+
         int hk[MAX_FINGERS], hi[MAX_FINGERS], hn = 0;
         for (int i = 0; i < MAX_FINGERS; i++)
             if (held[i].id >= 0) { hk[hn] = held[i].kind; hi[hn] = held[i].idx; hn++; }
@@ -587,6 +633,11 @@ int main(void) {
         if (set_dirty && now_t - set_dirty_t > 1000000ULL) { settings_save(); set_dirty = 0; }
 
         /* ---- MIDI по USB ---- */
+        if (g_pad_restore && g_now - g_last_str_t > PAD_RESTORE_S) {
+            g_pad_restore = 0;
+            if (st.mode == MODE_PAD && st.midi_tx && st.vol_pad > 0)
+                for (int i = 0; i < g_mpad_n; i++) midi_note(MIDI_CH_PAD, g_mpad[i], 1 + st.vol_pad * 126 / 100, MIDI_HOLD);
+        }
         midi_in_frame();
         midi_frame(dt);
         if (st.settings) {                     /* строка состояния на странице настроек */

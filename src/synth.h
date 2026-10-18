@@ -20,7 +20,8 @@ void synth_all_off(void);
 void synth_volume(float strings, float pad);
 /* ладонь на струнах (задняя панель): звенящее гаснет, новые щипки короткие и глухие */
 void synth_palm(int on);
-void synth_strum_sound(int dreamy);   /* звук струн: 0 - классика (треугольник), 1 - dreamy */
+void synth_pad_params(int attack, int cutoff, int mod);   /* 0..100, фейдеры Pad only */
+void synth_strum_sound(int sound);   /* звук струн: 0 - классика (треугольник), 1 - dreamy */
 void synth_sustain(int on);   /* сустейн: ноты звучат дольше (но не бесконечно) */
 
 /* гитара: щипок струны s (0 - самая толстая) нотой note; note < 0 - заглушенная струна

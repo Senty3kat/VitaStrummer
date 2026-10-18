@@ -32,13 +32,20 @@
 #define LCD_W 216
 #define LCD_H 44
 
-/* Pad only: большой фейдер громкости пэда на месте струн (100% сверху, 0% снизу) */
-#define FD_CX (PLATE_X + PLATE_W / 2)
-#define FD_Y0 (PLATE_Y + 70)
-#define FD_Y1 (PLATE_Y + PLATE_H - 40)
-#define FD_GW 34              /* ширина жёлоба */
-#define FD_KW 190             /* ручка */
-#define FD_KH 46
+/* Pad only: на месте струн 4 фейдера (громкость, атака, срез фильтра, модуляция; 100% сверху)
+ * и внизу кнопка HOLD */
+#define FD_N 4
+#define FD_X0 (PLATE_X + 72)  /* центр первого фейдера */
+#define FD_DX 110
+#define FD_Y0 (PLATE_Y + 96)
+#define FD_Y1 (PLATE_Y + PLATE_H - 92)
+#define FD_GW 22              /* ширина жёлоба */
+#define FD_KW 84              /* ручка */
+#define FD_KH 40
+#define HOLD_CX (PLATE_X + PLATE_W / 2)
+#define HOLD_CY (PLATE_Y + PLATE_H - 40)
+#define HOLD_W 200
+#define HOLD_H 44
 
 /* страница настроек (касание логотипа): панель по центру, три строки с галочками */
 #define LOGO_X1 232           /* логотип: x < LOGO_X1, y < LOGO_Y1 */
@@ -47,8 +54,8 @@
 #define SET_Y 58
 #define SET_W 540
 #define SET_H 418
-#define SET_ROW_Y0 128        /* центр первой строки */
-#define SET_ROW_DY 72
+#define SET_ROW_Y0 142        /* центр первой строки */
+#define SET_ROW_DY 70
 #define SET_ROWS 4
 #define SET_CHK_X 262         /* центр галочки */
 #define SET_CHK 34            /* размер галочки */

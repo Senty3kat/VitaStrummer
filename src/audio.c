@@ -8,7 +8,7 @@
 #include <psp2/audioout.h>
 
 /* ---------- очередь событий ---------- */
-enum { EV_STRUM = 1, EV_PAD = 2, EV_GUITAR = 3, EV_GDAMP = 4, EV_VOL = 5, EV_PALM = 6, EV_SUS = 7, EV_SOUND = 8 };
+enum { EV_STRUM = 1, EV_PAD = 2, EV_GUITAR = 3, EV_GDAMP = 4, EV_VOL = 5, EV_PALM = 6, EV_SUS = 7, EV_SOUND = 8, EV_PADP = 9 };
 typedef struct { uint8_t type, n; uint16_t delay; uint8_t notes[8]; } Ev;
 
 #define QSIZE 256                    /* степень двойки */
@@ -68,6 +68,14 @@ void audio_guitar_damp(int mask) {
     memset(&e, 0, sizeof(e));
     e.type = EV_GDAMP;
     e.notes[0] = (uint8_t)mask;
+    q_push(&e);
+}
+
+void audio_pad_params(int attack, int cutoff, int mod) {
+    Ev e;
+    memset(&e, 0, sizeof(e));
+    e.type = EV_PADP;
+    e.notes[0] = (uint8_t)attack; e.notes[1] = (uint8_t)cutoff; e.notes[2] = (uint8_t)mod;
     q_push(&e);
 }
 
@@ -149,6 +157,8 @@ static void drain_events(void) {
             synth_guitar_damp(e.notes[0]);
         } else if (e.type == EV_PALM) {
             synth_palm(e.notes[0]);
+        } else if (e.type == EV_PADP) {
+            synth_pad_params(e.notes[0], e.notes[1], e.notes[2]);
         } else if (e.type == EV_SOUND) {
             synth_strum_sound(e.notes[0]);
         } else if (e.type == EV_SUS) {

@@ -5,12 +5,22 @@
 #include "theory.h"
 
 /* MODE_PADONLY - пэд без струн: струнная панель - большая кнопка вкл/выкл пэда */
+/* версия приложения (CMake передаёт из VITA_VERSION) - видна в настройках */
+#ifndef APP_VERSION
+#define APP_VERSION "dev"
+#endif
+
+/* звук струн: классика (треугольник), dreamy, ancient (по пресету «Ancient Dream») */
+#define N_SOUNDS 3
+
 enum { MODE_STRUM = 0, MODE_PAD = 1, MODE_GUITAR = 2, MODE_PADONLY = 3, N_MODES = 4 };
 static inline int mode_pad(int m) { return m == MODE_PAD || m == MODE_PADONLY; }
 
 typedef struct {
     int mode;        /* MODE_STRUM / MODE_PAD / MODE_GUITAR / MODE_PADONLY */
-    int pad_off;     /* Pad only: пэд выключен касанием панели (аккорд остаётся выбранным) */
+    int pad_off;     /* (не используется) */
+    int hold;        /* Pad only: аккорд залипает (1) или звучит, пока держишь кнопку (0) */
+    int fd[4];       /* Pad only: фейдеры 0..100 - [0] не используется (громкость = vol_pad), атака, срез, модуляция */
     int chord_on;    /* аккорд "залип" */
     int root;        /* высота тоники 0..11 */
     int minor;       /* качество: 0 мажор, 1 минор (кнопки в центре колеса) */
@@ -31,7 +41,7 @@ typedef struct {
     int midi_rx;     /* приём MIDI по USB (ноты с компьютера; пока только в хроматике) */
     int midi_tx;     /* передача MIDI по USB (ноты Strum на компьютер) */
     int wide;        /* объёмный звук: правый канал +10 мс */
-    int sound;       /* звук струн: 0 - классика (треугольник), 1 - dreamy (калимба/вибрафон/эл. пиано + ревер) */
+    int sound;       /* звук струн: 0 - классика (треугольник), 1 - dreamy, 2 - ancient */
     int midi_state;  /* MIDI_* (midi.h) - для строки состояния */
 } AppState;
 
@@ -41,9 +51,9 @@ typedef struct {
     int show;        /* показывать отладку */
 } UiDebug;
 
-enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN, HIT_LOGO, HIT_SET, HIT_FADER };
-/* HIT_FADER (Pad only): index - громкость пэда 0..100 по высоте пальца */
-/* HIT_SET: index 0 - приём MIDI, 1 - передача MIDI, 2 - объёмный звук, 3 - dreamy-звук, -1 - закрыть */
+enum { HIT_NONE = 0, HIT_ROOT, HIT_MOD, HIT_QUAL, HIT_PLATE, HIT_MODE, HIT_OCT, HIT_VOL, HIT_QUICK, HIT_KEY, HIT_GPOS, HIT_TRN, HIT_LOGO, HIT_SET, HIT_FADER, HIT_HOLD };
+/* HIT_FADER (Pad only): index - номер фейдера 0..3 (громкость, атака, срез, модуляция); значение - ui_fader_value(y) */
+/* HIT_SET: index 0 - приём MIDI, 1 - передача MIDI, 2 - объёмный звук, 3 - звук струн (по кругу), -1 - закрыть */
 
 #define TRANSPOSE_MIN (-6)
 #define TRANSPOSE_MAX 6
@@ -62,6 +72,7 @@ static inline void quick_decode(int c, int *root, int *minor, int *mod, int *oct
 }
 
 int  ui_init(void);
+const char *ui_build_report(void);                 /* мс по частям построения графики при запуске */
 void ui_recreate(void);                              /* после "сна": текстуры заново */
 void ui_set_state(const AppState *s, const StringMap *m);
 /* палец на струнной панели (каждый кадр): от (x0,y0) прошлого кадра к (x1,y1) текущего,

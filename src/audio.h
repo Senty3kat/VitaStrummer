@@ -17,7 +17,8 @@ void audio_guitar_damp(int mask);                 /* заглушить стру
 void audio_volume(int strings, int pad);          /* 0..100 */
 void audio_sustain(int on);                        /* сустейн (задняя панель, левая рука) */
 void audio_palm(int on);                          /* ладонь на струнах (задняя панель) */
-void audio_sound(int dreamy);                     /* звук струн: 0 - классика, 1 - dreamy */
+void audio_pad_params(int attack, int cutoff, int mod);   /* фейдеры Pad only, 0..100 */
+void audio_sound(int sound);                       /* звук струн: 0 - классика, 1 - dreamy, 2 - ancient */                     /* звук струн: 0 - классика, 1 - dreamy */
 void audio_wide(int on);                          /* объёмный звук: правый канал +10 мс */
 
 /* диагностика для верхней полосы */

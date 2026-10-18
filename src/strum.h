@@ -50,6 +50,7 @@ void strum_move_xy(StrumFinger *f, float x, float y, const StringMap *m, StrumHi
 int  strum_key_at(float x, float y);
 /* гитара: струна звучит при каждом пересечении её линии пальцем (вниз и вверх) - тремоло
  * коротким движением через одну струну. Касание - струна под пальцем. */
+#define GTR_TAP_ZONE 14.0f       /* касание ближе этого к линии - удар сразу */
 #define GTR_LINE_HYST 4.0f       /* "мёртвая" полоса у линии струны (px), чтобы дрожание пальца не играло */
 void strum_gtr_down(StrumFinger *f, int id, float x, float y, StrumHit hit, void *user);
 void strum_gtr_move(StrumFinger *f, float x, float y, StrumHit hit, void *user);

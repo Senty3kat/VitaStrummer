@@ -13,9 +13,12 @@ include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_APP_NAME "Vita Strummer")
 set(VITA_TITLEID  "STRM00001")
-set(VITA_VERSION  "00.99")
+set(VITA_VERSION  "01.00")
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -O2 -std=gnu99")
+# версия для экрана настроек: "01.00" -> "v1.00"
+string(REGEX REPLACE "^0" "" APP_VER_SHORT "${VITA_VERSION}")
+add_compile_definitions(APP_VERSION="v${APP_VER_SHORT}")
 
 add_executable(${PROJECT_NAME}
   src/main.c

@@ -29,11 +29,20 @@ static int peak = 0;
 static const float STRUM_GAIN = 0.26f;
 static const float PAD_GAIN = 0.11f;
 static const float STRUM_ATTACK_S = 0.002f;
-static const float PAD_ATTACK_S = 0.060f;
+static float PAD_ATTACK_S = 0.064f;           /* меняется фейдером ATTACK (Pad only) */
+/* параметры пэда с фейдеров Pad only: срез фильтра шины пэда (1 - открыт) и глубина вибрато */
+static float g_pad_lpc = 1.0f, g_pad_vib = 0.0f, g_plp1 = 0.0f, g_plp2 = 0.0f;
+void synth_pad_params(int attack, int cutoff, int mod) {
+    PAD_ATTACK_S = 0.005f * powf(600.0f, (float)attack / 100.0f);         /* 5 мс .. 3 с (40 - как было) */
+    float fc = 120.0f * powf(100.0f, (float)cutoff / 100.0f);             /* 120 Гц .. 12 кГц */
+    g_pad_lpc = cutoff >= 100 ? 1.0f : 1.0f - expf(-2.0f * 3.14159265f * fc / (float)SYNTH_RATE);
+    g_pad_vib = 0.012f * (float)mod / 100.0f;                              /* до ~20 центов */
+}
 static const float PAD_RELEASE_S = 0.180f;
 
 /* громкость слоёв 0..1 (ручка на экране); 0.7 - уровень по умолчанию */
-static float g_vol_strings = 0.7f, g_vol_pad = 0.7f;
+static float g_vol_strings = 0.7f, g_vol_pad = 0.7f;      /* текущие (плавно идут к целевым) */
+static float g_vol_strings_t = 0.7f, g_vol_pad_t = 0.7f;  /* целевые: ручка/фейдер - без ступенек и треска */
 static int g_palm = 0;                /* ладонь на струнах (задняя панель): звук короткий и глухой */
 static int g_sus = 0;                 /* сустейн (задняя панель под левой рукой): звучит дольше, но гаснет */
 #define SUS_STRUM_MUL 2.6f            /* во сколько раз дольше струны страммера */
@@ -58,7 +67,8 @@ void synth_guitar_damp_tau(int mask, float tau);
 #define SIN_N 1024
 static float g_sin[SIN_N + 1];
 static int g_dream = 0;
-static float g_dlp = 0.0f;                           /* фильтр dreamy-шины */
+static float g_dlp = 0.0f;
+static int g_bus_tail = 0;                           /* сэмплов до остановки шин эффектов */                           /* фильтр dreamy-шины */
 static float g_lfo_t = 0.0f, g_lfo_v = 0.0f;          /* фазы тремоло и вибрато 0..1 */
 static inline float sinlut(float x) {                 /* sin(2 pi x), x в пределах -1..2 (без floorf) */
     if (x < 0.0f) x += 1.0f;
@@ -95,11 +105,40 @@ static float dream_reverb(float x) {
     return y;
 }
 
-void synth_strum_sound(int dreamy) { g_dream = dreamy ? 1 : 0; }
+void synth_strum_sound(int sound) { g_dream = (sound >= 0 && sound <= 2) ? sound : 0; }
+
+/* ---- звук 3 «Ancient»: по пресету Ableton Wavetable «Ancient Dream» (автору нравится) ----
+ * Голос: две пилы (сдвиг +-6 центов, как unison) + саб-синус на октаву ниже. Шина: «голос» -
+ * два полосовых фильтра на формантах «а» (как осциллятор Formant / Real Voice), НЧ ~4 кГц,
+ * дилей 1/8 на 120 BPM, потом общий ревер. */
+#define ANC_GAIN 0.085f
+static inline float polyblep(float t, float dt) {     /* сглаживание скачка пилы (меньше алиасинга) */
+    if (t < dt) { t /= dt; return t + t - t * t - 1.0f; }
+    if (t > 1.0f - dt) { t = (t - 1.0f) / dt; return t * t + t + t + 1.0f; }
+    return 0.0f;
+}
+static float a_bp1l, a_bp1b, a_bp2l, a_bp2b, a_lp;  /* состояния фильтров шины */
+#define ADL_N 12000                                   /* 250 мс */
+static float a_dl[ADL_N];
+static int a_dli;
+static float ancient_bus(float x) {
+    /* форманты 800 и 1150 Гц (Chamberlin SVF, Q ~ 4) */
+    const float f1 = 0.1045f, f2 = 0.1500f, q = 0.25f;
+    float h1 = x - a_bp1l - q * a_bp1b; a_bp1b += f1 * h1; a_bp1l += f1 * a_bp1b;
+    float h2 = x - a_bp2l - q * a_bp2b; a_bp2b += f2 * h2; a_bp2l += f2 * a_bp2b;
+    float y = x * 0.7f + (a_bp1b + a_bp2b) * 0.45f;
+    a_lp += (y - a_lp) * 0.41f;                        /* ~4 кГц */
+    y = a_lp;
+    float d = a_dl[a_dli];
+    a_dl[a_dli] = y + d * 0.35f;
+    if (++a_dli >= ADL_N) a_dli = 0;
+    return y + d * 0.28f;
+}
 
 void synth_init(void) {
     memset(v, 0, sizeof(v));
     for (int i = 0; i <= SIN_N; i++) g_sin[i] = sinf(2.0f * 3.14159265f * (float)i / (float)SIN_N);
+    g_bus_tail = 0; memset(a_dl, 0, sizeof(a_dl)); a_dli = 0; a_bp1l = a_bp1b = a_bp2l = a_bp2b = a_lp = 0.0f;
     memset(dr_c, 0, sizeof(dr_c)); memset(dr_a, 0, sizeof(dr_a)); memset(dr_lp, 0, sizeof(dr_lp));
     memset(dr_ci, 0, sizeof(dr_ci)); memset(dr_ai, 0, sizeof(dr_ai));
     guitar_init();
@@ -122,7 +161,8 @@ static Voice *alloc_voice(void) {
 /* затухание струны страммера: нижние звучат дольше верхних; ладонь - короткий щипок, сустейн - дольше */
 static float strum_tau(int note, int dream) {
     /* dreamy звенит дольше и мягче гаснет вверх по диапазону */
-    float tau = dream ? 1.1f * powf(2.0f, -(float)(note - 60) / 28.0f) : 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
+    float tau = dream == 2 ? 1.5f * powf(2.0f, -(float)(note - 60) / 30.0f)
+              : dream ? 1.1f * powf(2.0f, -(float)(note - 60) / 28.0f) : 0.9f * powf(2.0f, -(float)(note - 60) / 24.0f);
     if (g_palm) return 0.09f;
     return g_sus ? tau * SUS_STRUM_MUL : tau;
 }
@@ -144,9 +184,13 @@ static void start_strum(int note) {
     t->stage = ST_ATTACK;
     t->att_inc = 1.0f / (STRUM_ATTACK_S * (float)SYNTH_RATE);
     t->dream = g_dream;
+    if (t->dream == 2) {                                 /* ancient: фазы двух пил и саба */
+        if (t->env == 0.0f) { t->mph = 0.37f; t->bph = 0.0f; }
+        t->binc = t->inc * 0.5f;
+    }
     t->dec_mul = exp_mul(strum_tau(note, t->dream));
-    t->gain = t->dream ? DREAM_GAIN : STRUM_GAIN;
-    if (t->dream) {
+    t->gain = t->dream == 2 ? ANC_GAIN : (t->dream ? DREAM_GAIN : STRUM_GAIN);
+    if (t->dream == 1) {
         float hz = note_hz(note);
         t->midx = 0.22f;                                   /* мягкий удар язычка (автор: «слишком много верхов») */
         t->midx_mul = exp_mul(0.12f);                      /* ... и сразу округляется */
@@ -216,8 +260,8 @@ void synth_sustain(int on) {
 }
 
 void synth_volume(float strings, float pad) {
-    g_vol_strings = strings < 0.0f ? 0.0f : (strings > 1.0f ? 1.0f : strings);
-    g_vol_pad = pad < 0.0f ? 0.0f : (pad > 1.0f ? 1.0f : pad);
+    g_vol_strings_t = strings < 0.0f ? 0.0f : (strings > 1.0f ? 1.0f : strings);
+    g_vol_pad_t = pad < 0.0f ? 0.0f : (pad > 1.0f ? 1.0f : pad);
 }
 
 /* ---------- гитара ----------
@@ -530,11 +574,14 @@ void synth_render(int16_t *out, int n) {
                 pend[p] = pend[--npend];
             } else p++;
         }
-        float mix = 0.0f, dmix = 0.0f;
+        float mix = 0.0f, dmix = 0.0f, pmix = 0.0f, amix = 0.0f;
+        g_vol_pad += (g_vol_pad_t - g_vol_pad) * 0.0021f;            /* ~10 мс */
+        g_vol_strings += (g_vol_strings_t - g_vol_strings) * 0.0021f;
         /* общие LFO dreamy: тремоло 4.6 Гц, вибрато 5.3 Гц (+-2 цента) */
         g_lfo_t += 4.6f / (float)SYNTH_RATE; if (g_lfo_t >= 1.0f) g_lfo_t -= 1.0f;
         g_lfo_v += 5.3f / (float)SYNTH_RATE; if (g_lfo_v >= 1.0f) g_lfo_v -= 1.0f;
         float vib = 1.0f + 0.0012f * sinlut(g_lfo_v);
+        float pvib = 1.0f + g_pad_vib * sinlut(g_lfo_v);
         for (int i = 0; i < SYNTH_VOICES; i++) {
             Voice *t = &v[i];
             if (t->kind == V_FREE) continue;
@@ -553,29 +600,58 @@ void synth_render(int16_t *out, int n) {
                 break;
             }
             if (t->stage != ST_ATTACK && t->stage != ST_SUSTAIN && t->env < ENV_OFF) { t->kind = V_FREE; continue; }
+            if (t->dream == 2) {                           /* ancient: две пилы + саб, в свою шину */
+                float i1 = t->inc * 1.0035f * vib, i2 = t->inc * 0.9965f * vib;
+                float s1 = 2.0f * t->phase - 1.0f - polyblep(t->phase, i1);
+                float s2 = 2.0f * t->mph - 1.0f - polyblep(t->mph, i2);
+                float sub = sinlut(t->bph);
+                t->phase += i1; if (t->phase >= 1.0f) t->phase -= 1.0f;
+                t->mph += i2;   if (t->mph >= 1.0f) t->mph -= 1.0f;
+                t->bph += t->binc * vib; if (t->bph >= 1.0f) t->bph -= 1.0f;
+                amix += (s1 + s2 + 0.55f * sub) * t->env * t->gain;
+                continue;
+            }
             if (t->dream) {                                /* dreamy-струна - в свою шину (тремоло + ревер) */
-                float m = sinlut(t->mph) * t->midx;
-                float smp = sinlut(t->phase + m) + sinlut(t->bph) * t->bamp;
+                float m = t->midx != 0.0f ? sinlut(t->mph) * t->midx : 0.0f;   /* погасшее - не считаем */
+                float smp = sinlut(t->phase + m) + (t->bamp != 0.0f ? sinlut(t->bph) * t->bamp : 0.0f);
                 float di = t->inc * vib;
                 t->phase += di; if (t->phase >= 1.0f) t->phase -= 1.0f;
                 t->mph += di;   if (t->mph >= 1.0f) t->mph -= 1.0f;
                 t->bph += t->binc * vib; if (t->bph >= 1.0f) t->bph -= 1.0f;
-                t->midx *= t->midx_mul;
+                t->midx *= t->midx_mul;                    /* гаснут - а крошечные обнуляем (денормалы медленные) */
                 t->bamp *= t->bmul;
+                if (t->midx < 1e-5f) { t->midx = 0.0f; t->midx_mul = 1.0f; }
+                if (t->bamp < 1e-5f) { t->bamp = 0.0f; t->bmul = 1.0f; }
                 dmix += smp * t->env * t->gain;
                 continue;
             }
             /* треугольник: 1 -> -1 -> 1 за период */
             float tri = 4.0f * fabsf(t->phase - 0.5f) - 1.0f;
+            if (t->kind == V_PAD) {                        /* пэд - в свою шину (фильтр с фейдера), вибрато */
+                t->phase += t->inc * pvib;
+                if (t->phase >= 1.0f) t->phase -= 1.0f;
+                pmix += tri * t->env * t->gain;
+                continue;
+            }
             t->phase += t->inc;
             if (t->phase >= 1.0f) t->phase -= 1.0f;
-            mix += tri * t->env * t->gain * (t->kind == V_PAD ? g_vol_pad : g_vol_strings) * VOL_SCALE;
+            mix += tri * t->env * t->gain * g_vol_strings * VOL_SCALE;
         }
+        /* шина пэда: два однополюсных НЧ (на 100% фильтр открыт - звук как был) */
+        g_plp1 += (pmix - g_plp1) * g_pad_lpc;
+        g_plp2 += (g_plp1 - g_plp2) * g_pad_lpc;
+        mix += g_plp2 * g_vol_pad * VOL_SCALE;
         /* dreamy-шина: тремоло, потом ревер (ревер считается всегда - хвост доигрывает после выключения) */
         dmix *= (1.0f - 0.16f * (0.5f + 0.5f * sinlut(g_lfo_t))) * g_vol_strings * VOL_SCALE;
         g_dlp += (dmix - g_dlp) * 0.32f;                   /* мягкий НЧ-фильтр шины (~2.9 кГц): округло */
         dmix = g_dlp;
-        mix += dmix + DR_WET * dream_reverb(dmix * 0.6f);
+        /* шины dreamy / ancient и ревер считаются, только пока звучат (+5 с на хвост) - классика не платит */
+        if (amix != 0.0f || dmix != 0.0f) g_bus_tail = 5 * SYNTH_RATE;
+        if (g_bus_tail > 0) {
+            g_bus_tail--;
+            float an = ancient_bus(amix * g_vol_strings * VOL_SCALE + 1e-20f);   /* +1e-20: без денормалов */
+            mix += dmix + an + DR_WET * dream_reverb(dmix * 0.6f + an * 0.5f + 1e-20f);
+        }
         mix += guitar_render_sample() * g_vol_strings * VOL_SCALE;
         int o = (int)(soft_clip(mix) * 32000.0f);
         out[s] = (int16_t)o;

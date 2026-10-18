@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <vita2d.h>
+#include <time.h>
 
 /* ---------- палитра (снята с концепта Sonara) ---------- */
 #define C_RIM        RGBA8(60, 86, 110, 255)
@@ -96,7 +97,7 @@ static Sprite g_set_panel, g_chk[2];              /* страница настр
 static Canvas g_cv_gplate[2];
 static Canvas g_cv_fader;                         /* Pad only: панель без струн с жёлобом фейдера */
 static vita2d_texture *g_tex_fader;
-static Sprite g_fknob;                            /* ручка фейдера */
+static Sprite g_fknob, g_hold[2];                 /* ручка фейдера, кнопка HOLD выкл/вкл */
 static vita2d_texture *g_tex_gplate[2];
 static StrPix *g_gpix[N_GSTR];
 static int g_gpix_n[N_GSTR];
@@ -614,9 +615,18 @@ static void paint_gstrings(Canvas *c, int mode) {
 static void gtr_mask_paint(Canvas *c, int i) { paint_gstring(c, PLATE_X, PLATE_Y, i, GS_MASK); }
 static void gtr_range(int i, float *y0, float *y1) { *y0 = *y1 = gtr_string_y(i); }
 
+/* сколько времени заняли части построения графики при запуске (в лог) */
+static char g_prof[256];
+static clock_t g_prof_t;
+#define STEP(name) do { clock_t t_ = clock(); size_t l_ = strlen(g_prof); \
+    snprintf(g_prof + l_, sizeof(g_prof) - l_, "%s %d ", name, (int)((t_ - g_prof_t) * 1000 / CLOCKS_PER_SEC)); g_prof_t = t_; } while (0)
+const char *ui_build_report(void) { return g_prof; }
+
 static int build_all(void) {
+    g_prof[0] = 0; g_prof_t = clock();
     if (!canvas_alloc(&g_cv_bg, SCR_W, SCR_H)) return 0;
     paint_bg(&g_cv_bg);
+    STEP("bg");
 
     /* гриф гитары: копия панели без струн + лады, порожек, розетка, 6 струн (обычные и приглушённые) */
     for (int v = 0; v < 2; v++) {
@@ -627,33 +637,43 @@ static int build_all(void) {
         paint_gstrings(&g_cv_gplate[v], v ? GS_MUTED : GS_NORMAL);
     }
     if (!build_pixels(N_GSTR, gtr_mask_paint, gtr_range, g_gpix, g_gpix_n)) return 0;
+    STEP("guitar");
 
-    /* Pad only: панель без струн, по центру - утопленный жёлоб фейдера и риски через 10% */
+    /* Pad only: панель без струн - 4 утопленных жёлоба фейдеров с рисками через 10%, внизу место под HOLD */
     if (!canvas_alloc(&g_cv_fader, PLATE_W, PLATE_H)) return 0;
     for (int y = 0; y < PLATE_H; y++)
         memcpy(g_cv_fader.px + (size_t)y * PLATE_W, g_cv_bg.px + (size_t)(y + PLATE_Y) * SCR_W + PLATE_X, (size_t)PLATE_W * 4);
-    {
-        float gx = FD_CX - PLATE_X - FD_GW * 0.5f, gy = FD_Y0 - PLATE_Y - FD_GW * 0.5f;
+    for (int k = 0; k < FD_N; k++) {
+        float cx = FD_X0 + k * FD_DX - PLATE_X;
+        float gx = cx - FD_GW * 0.5f, gy = FD_Y0 - PLATE_Y - FD_GW * 0.5f;
         SdfRRect g = { gx, gy, FD_GW, FD_Y1 - FD_Y0 + FD_GW, FD_GW * 0.5f };
         Box bg = { g.x, g.y, g.x + g.w, g.y + g.h };
         engrave(&g_cv_fader, sdf_rrect, &g, bg, RGBA8(40, 60, 80, 255), RGBA8(50, 72, 94, 255), 1);
-        for (int k = 0; k <= 10; k++) {
-            float y = FD_Y1 - PLATE_Y - (FD_Y1 - FD_Y0) * (float)k / 10.0f;
-            int w = (k % 5 == 0) ? 46 : 26;
-            cv_rect(&g_cv_fader, (int)(gx - 18 - w), (int)y, w, 2, RGBA8(150, 172, 190, 200));
-            cv_rect(&g_cv_fader, (int)(gx + FD_GW + 18), (int)y, w, 2, RGBA8(150, 172, 190, 200));
+        for (int t = 0; t <= 10; t++) {
+            float y = FD_Y1 - PLATE_Y - (FD_Y1 - FD_Y0) * (float)t / 10.0f;
+            int w = (t % 5 == 0) ? 16 : 9;
+            cv_rect(&g_cv_fader, (int)(gx - 8 - w), (int)y, w, 2, RGBA8(150, 172, 190, 190));
+            cv_rect(&g_cv_fader, (int)(gx + FD_GW + 8), (int)y, w, 2, RGBA8(150, 172, 190, 190));
         }
     }
     {
         Box bk = { -FD_KW * 0.5f, -FD_KH * 0.5f, FD_KW * 0.5f, FD_KH * 0.5f };
         if (!sprite_alloc(&g_fknob, bk, 10)) return 0;
-        SdfRRect k = { bk.x0 - g_fknob.x, bk.y0 - g_fknob.y, FD_KW, FD_KH, FD_KH * 0.5f };
+        SdfRRect k = { bk.x0 - g_fknob.x, bk.y0 - g_fknob.y, FD_KW, FD_KH, 12 };
         bevel(&g_fknob.cv, sdf_rrect, &k, box_shift(bk, -g_fknob.x, -g_fknob.y), &SK_CREAM, 4.0f);
-        cv_rect(&g_fknob.cv, (int)(-g_fknob.x - 50), (int)(-g_fknob.y - 1), 100, 3, C_ORANGE);   /* риска на ручке */
+        cv_rect(&g_fknob.cv, (int)(-g_fknob.x - 28), (int)(-g_fknob.y - 1), 56, 3, C_ORANGE);   /* риска на ручке */
+    }
+    for (int v = 0; v < 2; v++) {                  /* кнопка HOLD: выкл - кремовая, вкл - оранжевая */
+        Box bh = { -HOLD_W * 0.5f, -HOLD_H * 0.5f, HOLD_W * 0.5f, HOLD_H * 0.5f };
+        if (!sprite_alloc(&g_hold[v], bh, 10)) return 0;
+        SdfRRect r = { bh.x0 - g_hold[v].x, bh.y0 - g_hold[v].y, HOLD_W, HOLD_H, HOLD_H * 0.5f };
+        bevel(&g_hold[v].cv, sdf_rrect, &r, box_shift(bh, -g_hold[v].x, -g_hold[v].y), v ? &SK_OR : &SK_CREAM, 3.0f);
     }
 
     paint_strings(&g_cv_bg, 0, 0, &PS_NORMAL);
+    STEP("strings");
     if (!build_pixels(N_STRINGS, harp_mask_paint, harp_range, g_spix, g_spix_n)) return 0;
+    STEP("strpix");
 
     /* "горящая" панель: копия фона в границах панели + струны оранжевым */
     for (int v = PL_LIT; v < PL_N; v++) {
@@ -663,6 +683,7 @@ static int build_all(void) {
         paint_strings(&g_cv_plate[v], PLATE_X, PLATE_Y, &PS_LIT);
     }
 
+    STEP("litplate");
     for (int i = 0; i < N_ROOTS; i++) {
         SdfSector s = make_sector(i, N_ROOTS, ROOT_R0, ROOT_R1, 18.0f);
         if (!make_sector_sprite(&g_root_spr[i][ST_NORMAL], s, &SK_CREAM)) return 0;
@@ -685,6 +706,7 @@ static int build_all(void) {
     if (!make_round(&g_dot, 9.0f, &dot, 1)) return 0;
     if (!make_qs_on(&g_qs_on)) return 0;
     if (!make_set_panel(&g_set_panel) || !make_check(&g_chk[0], 0) || !make_check(&g_chk[1], 1)) return 0;
+    STEP("sprites");
     return 1;
 }
 
@@ -704,8 +726,8 @@ static void free_textures(void) {
     for (int v = 0; v < 2; v++) { if (g_tex_gplate[v]) vita2d_free_texture(g_tex_gplate[v]); g_tex_gplate[v] = NULL; }
     if (g_tex_fader) vita2d_free_texture(g_tex_fader);
     g_tex_fader = NULL;
-    Sprite *one[7] = { &g_knob, &g_dot, &g_qs_on, &g_set_panel, &g_chk[0], &g_chk[1], &g_fknob };
-    for (int k = 0; k < 7; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
+    Sprite *one[9] = { &g_knob, &g_dot, &g_qs_on, &g_set_panel, &g_chk[0], &g_chk[1], &g_fknob, &g_hold[0], &g_hold[1] };
+    for (int k = 0; k < 9; k++) { if (one[k]->tex) vita2d_free_texture(one[k]->tex); one[k]->tex = NULL; }
 }
 
 static void fluid_clear_textures(void);
@@ -735,6 +757,7 @@ static void create_textures(void) {
     g_set_panel.tex = tex_from(&g_set_panel.cv);
     g_tex_fader = tex_from(&g_cv_fader);
     g_fknob.tex = tex_from(&g_fknob.cv);
+    for (int k = 0; k < 2; k++) g_hold[k].tex = tex_from(&g_hold[k].cv);
     for (int k = 0; k < 2; k++) g_chk[k].tex = tex_from(&g_chk[k].cv);
 }
 
@@ -1125,17 +1148,23 @@ int ui_fader_value(float y) {
     return v < 0.0f ? 0 : (v > 100.0f ? 100 : (int)(v + 0.5f));
 }
 
-/* Pad only: вместо клавиш и струн - большой фейдер громкости пэда */
+/* Pad only: вместо клавиш и струн - 4 фейдера и кнопка HOLD */
 static void draw_fader(void) {
+    static const char *NAME[FD_N] = { "VOLUME", "ATTACK", "CUTOFF", "MOD" };
     char buf[24];
     if (g_tex_fader) vita2d_draw_texture(g_tex_fader, PLATE_X, PLATE_Y);
-    float ky = (float)FD_Y1 - (float)(FD_Y1 - FD_Y0) * (float)g_st.vol_pad / 100.0f;
-    vita2d_draw_rectangle(FD_CX - 7, ky, 14, FD_Y1 - ky + 6, C_ORANGE);       /* налито от низа до ручки */
-    draw_sprite(&g_fknob, FD_CX, ky, is_held(HIT_FADER, 0));
-    text_spaced(PLATE_X + 34, PLATE_Y + 38, C_LCD_DIM, 0.7f, 3.0f, "PAD VOLUME", 1);
-    snprintf(buf, sizeof(buf), "%d", g_st.vol_pad);
-    text_at(PLATE_X + PLATE_W - 34 - text_w(1.4f, buf), PLATE_Y + 46, C_LCD_TEXT, 1.4f, buf, 1);
-    if (!g_st.chord_on) text_c(FD_CX, PLATE_Y + PLATE_H - 16, C_LCD_DIM, 0.62f, "choose a chord on the wheel", 0);
+    for (int k = 0; k < FD_N; k++) {
+        int v = k == 0 ? g_st.vol_pad : g_st.fd[k];
+        float cx = FD_X0 + k * FD_DX;
+        float ky = (float)FD_Y1 - (float)(FD_Y1 - FD_Y0) * (float)v / 100.0f;
+        vita2d_draw_rectangle(cx - 5, ky, 10, FD_Y1 - ky + 4, k == 0 ? C_ORANGE : RGBA8(242, 170, 108, 220));
+        draw_sprite(&g_fknob, cx, ky, is_held(HIT_FADER, k));
+        text_c(cx, PLATE_Y + 34, C_LCD_DIM, 0.66f, NAME[k], 1);
+        snprintf(buf, sizeof(buf), "%d", v);
+        text_c(cx, PLATE_Y + 60, C_LCD_TEXT, 1.0f, buf, 1);
+    }
+    draw_sprite(&g_hold[g_st.hold ? 1 : 0], HOLD_CX, HOLD_CY, is_held(HIT_HOLD, 0));
+    text_c(HOLD_CX, HOLD_CY - 1, g_st.hold ? C_LCD_TEXT : C_NAVY, 0.9f, g_st.hold ? "HOLD  ON" : "HOLD  OFF", 1);
 }
 
 static void draw_plate(void) {
@@ -1310,13 +1339,122 @@ static void draw_quick(void) {
 }
 
 /* ---------- внешний интерфейс ---------- */
+/* ---------- кэш графики ----------
+ * Построение всей объёмной графики процессором на Vita занимает секунды. Поэтому после первого
+ * построения всё (холсты, спрайты, пиксели струн) пишется в файл; при следующих запусках той же
+ * сборки читается оттуда - это доли секунды. Ключ - время сборки ui.c: новая версия строит заново.
+ * На компьютере (превью) кэша нет - всегда строим. */
+#if defined(__vita__) && !defined(UI_CACHE)
+#define UI_CACHE
+#endif
+#ifndef CACHE_PATH
+#define CACHE_PATH "ux0:data/Strummer/gfx.cache"
+#endif
+#define MAX_CV 128
+static Canvas *g_cvs[MAX_CV];
+static Sprite *g_cvspr[MAX_CV];
+static int g_ncv;
+
+static void cv_add(Canvas *c, Sprite *sp) { if (g_ncv < MAX_CV) { g_cvs[g_ncv] = c; g_cvspr[g_ncv] = sp; g_ncv++; } }
+static void sp_add(Sprite *sp) { cv_add(&sp->cv, sp); }
+
+static void cv_list(void) {
+    g_ncv = 0;
+    cv_add(&g_cv_bg, NULL);
+    for (int v = 0; v < 2; v++) cv_add(&g_cv_gplate[v], NULL);
+    cv_add(&g_cv_fader, NULL);
+    for (int v = 0; v < PL_N; v++) cv_add(&g_cv_plate[v], NULL);
+    for (int i = 0; i < N_ROOTS; i++) for (int k = 0; k < 2; k++) sp_add(&g_root_spr[i][k]);
+    for (int i = 0; i < N_MODS; i++) for (int k = 0; k < ST_N; k++) sp_add(&g_mod_spr[i][k]);
+    for (int q = 0; q < 2; q++) for (int k = 0; k < ST_N; k++) sp_add(&g_qual_spr[q][k]);
+    for (int k = 0; k < 2; k++) sp_add(&g_led[k]);
+    sp_add(&g_knob); sp_add(&g_dot); sp_add(&g_qs_on); sp_add(&g_set_panel);
+    sp_add(&g_chk[0]); sp_add(&g_chk[1]); sp_add(&g_fknob); sp_add(&g_hold[0]); sp_add(&g_hold[1]);
+}
+
+#ifdef UI_CACHE
+static const char *cache_key(void) {
+    static char key[64];
+    snprintf(key, sizeof(key), "VSGFX2 %s %s %d %d", __DATE__, __TIME__, (int)sizeof(StrPix), MAX_CV);
+    return key;
+}
+
+static void cache_save(void) {
+    FILE *f = fopen(CACHE_PATH ".tmp", "wb");
+    if (!f) return;
+    char key[64] = { 0 };
+    strncpy(key, cache_key(), sizeof(key) - 1);
+    int ok = fwrite(key, sizeof(key), 1, f) == 1 && fwrite(&g_ncv, sizeof(int), 1, f) == 1;
+    for (int i = 0; ok && i < g_ncv; i++) {
+        Canvas *c = g_cvs[i];
+        float xy[2] = { g_cvspr[i] ? g_cvspr[i]->x : 0.0f, g_cvspr[i] ? g_cvspr[i]->y : 0.0f };
+        int wh[2] = { c->px ? c->w : 0, c->px ? c->h : 0 };
+        ok = fwrite(wh, sizeof(wh), 1, f) == 1 && fwrite(xy, sizeof(xy), 1, f) == 1;
+        if (ok && wh[0] > 0) ok = fwrite(c->px, (size_t)wh[0] * wh[1] * 4, 1, f) == 1;
+    }
+    for (int i = 0; ok && i < N_STRINGS + N_GSTR; i++) {
+        int n = i < N_STRINGS ? g_spix_n[i] : g_gpix_n[i - N_STRINGS];
+        StrPix *p = i < N_STRINGS ? g_spix[i] : g_gpix[i - N_STRINGS];
+        ok = fwrite(&n, sizeof(int), 1, f) == 1 && (n == 0 || fwrite(p, sizeof(StrPix) * (size_t)n, 1, f) == 1);
+    }
+    fclose(f);
+    if (ok) { remove(CACHE_PATH); rename(CACHE_PATH ".tmp", CACHE_PATH); }
+    else remove(CACHE_PATH ".tmp");
+}
+
+static void cache_free(void) {
+    for (int i = 0; i < g_ncv; i++) { free(g_cvs[i]->px); g_cvs[i]->px = NULL; g_cvs[i]->w = g_cvs[i]->h = 0; }
+    for (int i = 0; i < N_STRINGS; i++) { free(g_spix[i]); g_spix[i] = NULL; g_spix_n[i] = 0; }
+    for (int i = 0; i < N_GSTR; i++) { free(g_gpix[i]); g_gpix[i] = NULL; g_gpix_n[i] = 0; }
+}
+
+static int cache_load(void) {
+    FILE *f = fopen(CACHE_PATH, "rb");
+    if (!f) return 0;
+    char key[64];
+    int n = 0, ok = fread(key, sizeof(key), 1, f) == 1 && fread(&n, sizeof(int), 1, f) == 1;
+    key[63] = 0;
+    ok = ok && strcmp(key, cache_key()) == 0 && n == g_ncv;
+    for (int i = 0; ok && i < g_ncv; i++) {
+        int wh[2];
+        float xy[2];
+        ok = fread(wh, sizeof(wh), 1, f) == 1 && fread(xy, sizeof(xy), 1, f) == 1 && wh[0] >= 0 && wh[1] >= 0
+             && wh[0] <= SCR_W + 64 && wh[1] <= SCR_H + 64;
+        if (!ok) break;
+        if (g_cvspr[i]) { g_cvspr[i]->x = xy[0]; g_cvspr[i]->y = xy[1]; }
+        if (wh[0] == 0) continue;
+        ok = canvas_alloc(g_cvs[i], wh[0], wh[1]) && fread(g_cvs[i]->px, (size_t)wh[0] * wh[1] * 4, 1, f) == 1;
+    }
+    for (int i = 0; ok && i < N_STRINGS + N_GSTR; i++) {
+        int k = 0;
+        ok = fread(&k, sizeof(int), 1, f) == 1 && k >= 0 && k < PLATE_W * PLATE_H;
+        if (!ok) break;
+        StrPix *p = (StrPix *)malloc(sizeof(StrPix) * (size_t)(k ? k : 1));
+        ok = p != NULL && (k == 0 || fread(p, sizeof(StrPix) * (size_t)k, 1, f) == 1);
+        if (i < N_STRINGS) { g_spix[i] = p; g_spix_n[i] = k; } else { g_gpix[i - N_STRINGS] = p; g_gpix_n[i - N_STRINGS] = k; }
+    }
+    fclose(f);
+    if (!ok) cache_free();
+    return ok;
+}
+#endif
+
 int ui_init(void) {
     g_nfd = 0;
     fluid_init_palette();
     fluid_init_tables();
     memset(&g_st, 0, sizeof(g_st));
     stringmap_build(&g_map, 0, 0, 0, STRING_BASE_NOTE);
+    cv_list();
+#ifdef UI_CACHE
+    if (cache_load()) snprintf(g_prof, sizeof(g_prof), "from cache");
+    else {
+        if (!build_all()) return 0;
+        cache_save();
+    }
+#else
     if (!build_all()) return 0;
+#endif
     g_pgf = vita2d_load_default_pgf();
     create_textures();
     return g_tex_bg != NULL && g_pgf != NULL;
@@ -1369,7 +1507,8 @@ void ui_touch_glow(float x0, float y0, float x1, float y1, int down) {
         return;
     }
     int s1 = (int)gtr_pos_from_y(y1);
-    if (down) fluid_hit(s1, x1, 1.0f);                      /* касание: удар по струне под пальцем */
+    if (down && s1 >= 0 && s1 < N_GSTR && fabsf(y1 - gtr_string_y(s1)) <= GTR_TAP_ZONE)
+        fluid_hit(s1, x1, 1.0f);                            /* касание прямо на струну - удар */
     /* струна загорается, когда палец пересёк её линию (как звучит) - и при тремоло туда-обратно */
     for (int s = 0; s < N_GSTR; s++) {
         float c = gtr_string_y(s);
@@ -1429,7 +1568,12 @@ int ui_hit(float x, float y, int *index) {
     /* струны (в Pad only - фейдер громкости пэда на всю панель) */
     SdfCarved pl = plate_shape();
     if (sdf_carved(x, y, &pl) < 4.0f) {
-        if (g_st.mode == MODE_PADONLY) { *index = ui_fader_value(y); return HIT_FADER; }
+        if (g_st.mode == MODE_PADONLY) {               /* Pad only: HOLD внизу, фейдеры - по ближайшему */
+            if (y >= HOLD_CY - HOLD_H * 0.5f - 6) return HIT_HOLD;
+            int k = (int)floorf((x - (FD_X0 - FD_DX * 0.5f)) / FD_DX);
+            *index = k < 0 ? 0 : (k >= FD_N ? FD_N - 1 : k);
+            return HIT_FADER;
+        }
         return HIT_PLATE;
     }
 
@@ -1454,19 +1598,27 @@ int ui_hit(float x, float y, int *index) {
 static void draw_settings(void) {
     vita2d_draw_rectangle(0, 0, 960, 544, RGBA8(14, 24, 36, 150));
     draw_sprite(&g_set_panel, 0, 0, 0);
-    text_spaced(SET_X + 34, SET_Y + 40, C_NAVY, 0.95f, 4.0f, "SETTINGS", 1);
+    text_at(SET_X + 34, SET_Y + 42, C_NAVY, 1.15f, "SETTINGS", 1);
+    text_at(SET_X + 34 + text_w(1.15f, "SETTINGS") + 14, SET_Y + 42, C_NAVY_SOFT, 0.7f, "Vita Strummer " APP_VERSION, 0);
     text_c(SET_X + SET_W - 34, SET_Y + 32, is_held(HIT_SET, -1) ? C_ORANGE : C_NAVY, 1.3f, "x", 1);
-    static const char *TITLE[SET_ROWS] = { "MIDI IN  (USB)", "MIDI OUT  (USB)", "WIDE SOUND", "DREAMY SOUND" };
+    static const char *SOUND_NAME[N_SOUNDS] = { "CLASSIC", "DREAMY", "ANCIENT" };
+    static const char *SOUND_HINT[N_SOUNDS] = { "strings: soft triangle - tap to change",
+                                                "kalimba / vibes / e-piano + tremolo, reverb - tap to change",
+                                                "two saws + sub, voice formant, delay - tap to change" };
+    static const char *TITLE[SET_ROWS] = { "MIDI IN  (USB)", "MIDI OUT  (USB)", "WIDE SOUND", "SOUND" };
     static const char *HINT[SET_ROWS] = { "notes from computer - chromatic strings (no chord)",
-                                          "strings & guitar - channel 1, pad - channel 2",
-                                          "right channel 10 ms later - wider, more space",
-                                          "strings: kalimba / vibes / e-piano, tremolo + reverb" };
-    int val[SET_ROWS] = { g_st.midi_rx, g_st.midi_tx, g_st.wide, g_st.sound };
+                                          "strings & guitar - ch 1, pad - ch 2 (+ faders CC 7/73/74/1)",
+                                          "right channel 10 ms later - wider, more space", "" };
+    int val[SET_ROWS] = { g_st.midi_rx, g_st.midi_tx, g_st.wide, g_st.sound != 0 };
     for (int k = 0; k < SET_ROWS; k++) {
         float cy = SET_ROW_Y0 + k * SET_ROW_DY;
         draw_sprite(&g_chk[val[k] ? 1 : 0], SET_CHK_X, cy, is_held(HIT_SET, k));
-        text_at(SET_CHK_X + 34, cy - 3, C_NAVY, 1.0f, TITLE[k], 1);
-        text_at(SET_CHK_X + 34, cy + 17, C_NAVY_SOFT, 0.62f, HINT[k], 0);
+        const char *title = TITLE[k], *hint = HINT[k];
+        if (k == 3) hint = SOUND_HINT[g_st.sound % N_SOUNDS];
+        text_at(SET_CHK_X + 34, cy - 4, C_NAVY, 1.0f, title, 1);
+        if (k == 3)                                /* звук струн: название выбранного рядом */
+            text_at(SET_CHK_X + 34 + text_w(1.0f, title) + 14, cy - 4, C_OR_EDGE, 1.0f, SOUND_NAME[g_st.sound % N_SOUNDS], 1);
+        text_at(SET_CHK_X + 34, cy + 16, C_NAVY_SOFT, 0.62f, hint, 0);
     }
     /* состояние USB-MIDI */
     static const char *ST[] = { "MIDI off", "plugin not found: psvita_usb_audio_midi.skprx in ur0:tai",

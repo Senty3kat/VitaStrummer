@@ -128,6 +128,15 @@ static void test_gtr_tremolo(void) {
     float jit[] = { c + 7.0f, c + 3.0f, c + 6.0f, c + 2.0f, c + 8.0f };   /* дрожание у линии */
     for (int i = 0; i < 5; i++) { strum_gtr_move(&f, x, jit[i], gtr_hit, NULL); f.y = jit[i]; }
     CHECK(g_gn == n0);
+    /* палец поставлен между струнами - тишина; вниз через линию - звук, вверх - снова звук */
+    g_gn = 0;
+    f.x = x; f.y = c - 30.0f;
+    strum_gtr_down(&f, 2, x, f.y, gtr_hit, NULL);
+    CHECK(g_gn == 0);
+    strum_gtr_move(&f, x, c + 10.0f, gtr_hit, NULL); f.y = c + 10.0f;
+    CHECK(g_gn == 1);
+    strum_gtr_move(&f, x, c - 10.0f, gtr_hit, NULL); f.y = c - 10.0f;
+    CHECK(g_gn == 2 && g_ghits[0] == 2 && g_ghits[1] == 2);
     /* проведение через все струны - каждая по разу, по порядку */
     g_gn = 0;
     f.y = gtr_string_y(0) + 20.0f;
@@ -411,7 +420,8 @@ static void test_dreamy(void) {
     static int16_t buf[48000 * 14];
     const int N = 48000 * 14;
     double t_cls = 0, t_drm = 0;
-    for (int pass = 0; pass < 2; pass++) {
+    double t_anc = 0;
+    for (int pass = 0; pass < 3; pass++) {
         synth_init();
         synth_strum_sound(pass);
         clock_t c0 = clock();
@@ -427,12 +437,15 @@ static void test_dreamy(void) {
             }
         }
         double t = (double)(clock() - c0) / CLOCKS_PER_SEC;
-        if (pass) t_drm = t; else t_cls = t;
-        printf("%s: peak %d, clip %d, tail peak %d\n", pass ? "dreamy" : "classic", pk1, clip, pk_end);
+        if (pass == 2) t_anc = t; else if (pass) t_drm = t; else t_cls = t;
+        static const char *NM[3] = { "classic", "dreamy", "ancient" };
+        printf("%s: peak %d, clip %d, tail peak %d, %.1f ms per audio second\n", NM[pass], pk1, clip, pk_end, t * 1000.0 / 14.0);
         CHECK(clip == 0 && pk1 > 3000);
-        if (pass) { CHECK(pk_end * 20 < pk1); wav_write("out/dreamy_demo.wav", buf, N); }
+        if (pass) CHECK(pk_end * 20 < pk1);
+        if (pass == 1) wav_write("out/dreamy_demo.wav", buf, N);
+        if (pass == 2) wav_write("out/ancient_demo.wav", buf, N);
     }
-    printf("dreamy cpu: x%.2f of classic (24 voices), %.1f ms per audio second on this PC\n", t_drm / (t_cls > 1e-9 ? t_cls : 1e-9), t_drm * 1000.0 / 14.0);
+    printf("cpu vs classic (24 voices): dreamy x%.2f, ancient x%.2f\n", t_drm / (t_cls > 1e-9 ? t_cls : 1e-9), t_anc / (t_cls > 1e-9 ? t_cls : 1e-9));
     synth_strum_sound(0);
 }
 

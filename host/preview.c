@@ -108,7 +108,7 @@ static void path_gdown(int fr, float *x, float *y) {
 int main(void) {
     clock_t t0 = clock();
     if (!ui_init()) { printf("ui_init failed\n"); return 1; }
-    printf("ui_init: %.0f ms on this PC\n", (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC);
+    printf("ui_init: %.0f ms on this PC (%s)\n", (double)(clock() - t0) * 1000.0 / CLOCKS_PER_SEC, ui_build_report());
     set_state(MODE_STRUM, 0, 0, 0, 0, 0);
     shot("screen_chromatic", 0, 0);
     set_state(MODE_STRUM, 1, 0, 0, 0, 0);
