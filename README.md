@@ -9,7 +9,6 @@
   &nbsp;·&nbsp; <a href="#english">English</a> &nbsp;·&nbsp; <a href="#русский">Русский</a>
 </p>
 
-<p align="center"><img src="docs/img/strum.gif" width="640" alt="Strumming across the strings"></p>
 
 ---
 
@@ -41,16 +40,6 @@ along every string you touch.
   - **MIDI IN / MIDI OUT over USB** — play your DAW from the Vita or play the Vita from your DAW.
   - **Wide sound** — 10 ms Haas delay on the right channel.
   - **Dreamy sound** — a soft kalimba / vibraphone / e-piano voice with tremolo and reverb.
-
-### Screenshots
-
-| Strum with a chord | Liquid light |
-|---|---|
-| ![Strum](docs/img/strum_chord.png) | ![Fluid](docs/img/strum_fluid.png) |
-| **Guitar** | **Guitar, barre position** |
-| ![Guitar](docs/img/guitar.png) | ![Barre](docs/img/guitar_barre.png) |
-| **Key mode** | **Pad only** |
-| ![Key](docs/img/key_mode.png) | ![Pad only](docs/img/pad_only.png) |
 
 ### Installation
 
@@ -117,6 +106,13 @@ python3 host/preview.py    # previews as PNG
 - USB-MIDI: [psvita-usb-audio-midi](https://github.com/intermynd-instruments/psvita-usb-audio-midi)
   (MIT, DS-8 by intermynd instruments) with VitaMIDI changes.
 - Built with [vitasdk](https://vitasdk.org) and vita2d.
+- Designed and tested by Senty3kat; the code was written together with **Claude** (Anthropic) —
+  thank you, Claude, none of this would exist without you.
+
+### License
+
+[MIT](LICENSE) — take it, change it, make your own, better version. The USB-MIDI client in
+`third_party/psvita-usb-audio-midi` has its own MIT license.
 
 ---
 
@@ -148,16 +144,6 @@ Vita Strummer превращает PS Vita в карманную аккордо�
   - **MIDI IN / MIDI OUT по USB** — играть с Vita в DAW или из DAW на Vita.
   - **Wide sound** — правый канал на 10 мс позже (эффект Хааса).
   - **Dreamy sound** — мягкий звук струн: калимба / вибрафон / электропиано с тремоло и ревером.
-
-### Скриншоты
-
-| Strum с аккордом | Жидкий свет |
-|---|---|
-| ![Strum](docs/img/strum_chord.png) | ![Fluid](docs/img/strum_fluid.png) |
-| **Гитара** | **Гитара, баррэ** |
-| ![Guitar](docs/img/guitar.png) | ![Barre](docs/img/guitar_barre.png) |
-| **Тональность** | **Pad only** |
-| ![Key](docs/img/key_mode.png) | ![Pad only](docs/img/pad_only.png) |
 
 ### Установка
 
@@ -224,3 +210,10 @@ python3 host/preview.py    # превью в PNG
 - USB-MIDI: [psvita-usb-audio-midi](https://github.com/intermynd-instruments/psvita-usb-audio-midi)
   (MIT, DS-8 от intermynd instruments) с правками VitaMIDI.
 - Сделано на [vitasdk](https://vitasdk.org) и vita2d.
+- Идея, дизайн и тесты — Senty3kat; код написан вместе с **Claude** (Anthropic) —
+  спасибо, Claude, без тебя ничего этого бы не было.
+
+### Лицензия
+
+[MIT](LICENSE) — бери, меняй, делай свою версию, ещё лучше. У USB-MIDI клиента в
+`third_party/psvita-usb-audio-midi` своя лицензия MIT.
